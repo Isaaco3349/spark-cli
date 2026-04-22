@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -186,7 +188,12 @@ def collect_secret_requirements(modules: list[Module]) -> dict[str, dict[str, An
     return requirements
 
 
-def collect_secret_values(args: argparse.Namespace, modules: list[Module]) -> dict[str, str]:
+def collect_secret_values(
+    args: argparse.Namespace,
+    modules: list[Module],
+    *,
+    interactive: bool | None = None,
+) -> dict[str, str]:
     secret_values = parse_secret_pairs(getattr(args, "secret", None))
     legacy_map = {
         "telegram.bot_token": getattr(args, "bot_token", None),
@@ -198,6 +205,12 @@ def collect_secret_values(args: argparse.Namespace, modules: list[Module]) -> di
             secret_values.setdefault(key, str(value))
 
     requirements = collect_secret_requirements(modules)
+
+    if interactive is None:
+        interactive = setup_is_interactive(args)
+    if interactive:
+        secret_values = run_setup_wizard(secret_values, requirements)
+
     missing = [
         secret_id
         for secret_id, requirement in requirements.items()
@@ -210,6 +223,106 @@ def collect_secret_values(args: argparse.Namespace, modules: list[Module]) -> di
             descriptions.append(f"{secret_id} ({requirement.get('prompt')})")
         raise SystemExit("Missing required secrets: " + ", ".join(descriptions))
     return secret_values
+
+
+def stdin_is_tty() -> bool:
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
+def setup_is_interactive(args: argparse.Namespace) -> bool:
+    if getattr(args, "non_interactive", False):
+        return False
+    return stdin_is_tty()
+
+
+def detect_claude_code() -> dict[str, Any]:
+    path = shutil.which("claude")
+    return {"present": bool(path), "path": path}
+
+
+def detect_runtime_binary(name: str) -> dict[str, Any]:
+    path = shutil.which(name)
+    if not path:
+        return {"name": name, "present": False, "path": None, "version": None}
+    try:
+        result = subprocess.run(
+            [path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {"name": name, "present": True, "path": path, "version": None, "error": str(error)}
+    output = (result.stdout + result.stderr).strip().splitlines()
+    version = output[0] if result.returncode == 0 and output else None
+    return {"name": name, "present": True, "path": path, "version": version}
+
+
+def required_runtimes_for_modules(modules: list[Module]) -> list[str]:
+    seen: list[str] = []
+    for module in modules:
+        runtime = module.manifest.get("runtime", {})
+        for key in ("package_manager", "kind"):
+            candidate = runtime.get(key)
+            if not candidate:
+                continue
+            name = str(candidate)
+            if name not in seen:
+                seen.append(name)
+    return seen
+
+
+def print_setup_preflight(bundle: list[Module]) -> None:
+    print("")
+    print("Spark setup preflight:")
+    cc = detect_claude_code()
+    if cc["present"]:
+        print(f"  [OK]   claude (Claude Code) detected at {cc['path']}")
+    else:
+        print("  [miss] claude (Claude Code) not on PATH -- install for OAuth-based LLM calls")
+    for runtime_name in required_runtimes_for_modules(bundle):
+        info = detect_runtime_binary(runtime_name)
+        if info["present"]:
+            version = info.get("version") or "version unknown"
+            print(f"  [OK]   {runtime_name} -> {version}")
+        else:
+            print(f"  [miss] {runtime_name} not on PATH -- install before running setup")
+
+
+def prompt_for_secret(secret_id: str, requirement: dict[str, Any]) -> str:
+    required = bool(requirement.get("required"))
+    prompt_text = str(requirement.get("prompt") or secret_id)
+    suffix = "" if required else " (press enter to skip)"
+    while True:
+        try:
+            value = getpass.getpass(f"  {prompt_text}{suffix}: ")
+        except EOFError:
+            return ""
+        if value:
+            return value
+        if not required:
+            return ""
+        print(f"  {secret_id} is required. Paste a value or cancel with Ctrl-C.")
+
+
+def run_setup_wizard(
+    existing_values: dict[str, str],
+    requirements: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    collected = dict(existing_values)
+    to_prompt = [secret_id for secret_id in requirements if secret_id not in collected]
+    if not to_prompt:
+        return collected
+    print("")
+    print("Spark setup wizard -- enter the secrets this bundle needs (input is hidden).")
+    for secret_id in to_prompt:
+        value = prompt_for_secret(secret_id, requirements[secret_id])
+        if value:
+            collected[secret_id] = value
+    return collected
 
 
 def generated_module_env_path(module: Module) -> Path:
@@ -746,7 +859,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
     conflicts = detect_capability_conflicts(bundle, installed_modules)
     if conflicts:
         raise SystemExit("Cannot run setup because of capability conflicts: " + "; ".join(conflicts))
-    secret_values = collect_secret_values(args, bundle)
+    interactive = setup_is_interactive(args)
+    if interactive:
+        print_setup_preflight(bundle)
+    secret_values = collect_secret_values(args, bundle, interactive=interactive)
 
     setup_state = {
         "bundle": args.bundle,
@@ -1206,6 +1322,11 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser = subparsers.add_parser("setup", help="Configure a starter bundle")
     setup_parser.add_argument("bundle", choices=sorted(load_registry_definition().get("bundles", {}).keys()))
     setup_parser.add_argument("--skip-install-commands", action="store_true")
+    setup_parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Skip interactive preflight and secret prompts (require --secret for every required secret).",
+    )
     setup_parser.add_argument("--secret", action="append", help="Provide manifest secret values as key=value")
     setup_parser.add_argument("--bot-token")
     setup_parser.add_argument("--admin-telegram-ids")

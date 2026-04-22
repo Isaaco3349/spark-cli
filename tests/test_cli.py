@@ -15,6 +15,7 @@ from spark_cli.cli import (
     collect_secret_requirements,
     collect_secret_values,
     CONFIG_PATH,
+    detect_runtime_binary,
     install_module_record,
     load_json,
     Module,
@@ -30,6 +31,9 @@ from spark_cli.cli import (
     pid_is_running,
     print_install_summary,
     ready_timeout_seconds,
+    required_runtimes_for_modules,
+    run_setup_wizard,
+    setup_is_interactive,
     wait_for_ready_check,
     resolve_bundle_names,
     resolve_install_target,
@@ -339,6 +343,132 @@ class SparkCliTests(unittest.TestCase):
             ready, detail = wait_for_ready_check(module)
             self.assertTrue(ready)
             self.assertEqual(detail, "ready")
+
+    def test_required_runtimes_for_modules_dedups_across_bundle(self) -> None:
+        python_module = Module(
+            name="python-a",
+            path=Path("C:/tmp/python-a"),
+            manifest={
+                "module": {"name": "python-a", "version": "0.1.0", "kind": "runtime", "plane": "runtime"},
+                "runtime": {"kind": "python", "package_manager": "uv"},
+            },
+        )
+        python_module_b = Module(
+            name="python-b",
+            path=Path("C:/tmp/python-b"),
+            manifest={
+                "module": {"name": "python-b", "version": "0.1.0", "kind": "runtime", "plane": "runtime"},
+                "runtime": {"kind": "python", "package_manager": "uv"},
+            },
+        )
+        node_module = Module(
+            name="node-app",
+            path=Path("C:/tmp/node-app"),
+            manifest={
+                "module": {"name": "node-app", "version": "0.1.0", "kind": "app", "plane": "execution"},
+                "runtime": {"kind": "node", "package_manager": "bun"},
+            },
+        )
+        self.assertEqual(
+            required_runtimes_for_modules([python_module, python_module_b, node_module]),
+            ["uv", "python", "bun", "node"],
+        )
+
+    def test_detect_runtime_binary_reports_present_for_python(self) -> None:
+        info = detect_runtime_binary("python")
+        self.assertTrue(info["present"])
+        self.assertIsNotNone(info["path"])
+
+    def test_detect_runtime_binary_reports_absent_for_missing_tool(self) -> None:
+        info = detect_runtime_binary("definitely-not-a-real-tool-xyz")
+        self.assertFalse(info["present"])
+        self.assertIsNone(info["path"])
+        self.assertIsNone(info["version"])
+
+    def test_setup_is_interactive_honors_non_interactive_flag(self) -> None:
+        class Args:
+            non_interactive = True
+        self.assertFalse(setup_is_interactive(Args()))
+
+    def test_run_setup_wizard_only_prompts_for_missing_secrets(self) -> None:
+        requirements = {
+            "telegram.bot_token": {"prompt": "Bot token", "required": True},
+            "telegram.admin_ids": {"prompt": "Admin ids", "required": True},
+            "telegram.webhook_secret": {"prompt": "Webhook secret", "required": False},
+        }
+        existing = {"telegram.bot_token": "already-set"}
+        prompted: list[str] = []
+
+        def fake_getpass(prompt: str) -> str:
+            prompted.append(prompt)
+            if "Admin ids" in prompt:
+                return "123,456"
+            if "Webhook secret" in prompt:
+                return ""
+            return "SHOULD-NOT-HAPPEN"
+
+        with patch("spark_cli.cli.getpass.getpass", side_effect=fake_getpass):
+            collected = run_setup_wizard(existing, requirements)
+        self.assertEqual(collected["telegram.bot_token"], "already-set")
+        self.assertEqual(collected["telegram.admin_ids"], "123,456")
+        self.assertNotIn("telegram.webhook_secret", collected)
+        self.assertEqual(len(prompted), 2)
+
+    def test_run_setup_wizard_reprompts_when_required_secret_empty(self) -> None:
+        requirements = {"telegram.bot_token": {"prompt": "Bot token", "required": True}}
+        answers = iter(["", "finally-a-value"])
+
+        with patch("spark_cli.cli.getpass.getpass", side_effect=lambda _prompt: next(answers)):
+            collected = run_setup_wizard({}, requirements)
+        self.assertEqual(collected["telegram.bot_token"], "finally-a-value")
+
+    def test_collect_secret_values_prompts_when_interactive_and_missing(self) -> None:
+        module = Module(
+            name="spark-telegram-bot",
+            path=Path("C:/tmp/spark-telegram-bot"),
+            manifest={
+                "module": {"name": "spark-telegram-bot", "version": "1.0.0", "kind": "service", "plane": "ingress"},
+                "needs": {"secrets": ["telegram.bot_token"]},
+                "secrets": {
+                    "telegram_bot_token": {"prompt": "Bot token", "required": True, "env_var": "BOT_TOKEN"},
+                },
+            },
+        )
+
+        class Args:
+            secret = None
+            bot_token = None
+            admin_telegram_ids = None
+            telegram_webhook_secret = None
+            non_interactive = False
+
+        with patch("spark_cli.cli.getpass.getpass", return_value="prompted-value"):
+            values = collect_secret_values(Args(), [module], interactive=True)
+        self.assertEqual(values["telegram.bot_token"], "prompted-value")
+
+    def test_collect_secret_values_non_interactive_raises_on_missing(self) -> None:
+        module = Module(
+            name="spark-telegram-bot",
+            path=Path("C:/tmp/spark-telegram-bot"),
+            manifest={
+                "module": {"name": "spark-telegram-bot", "version": "1.0.0", "kind": "service", "plane": "ingress"},
+                "needs": {"secrets": ["telegram.bot_token"]},
+                "secrets": {
+                    "telegram_bot_token": {"prompt": "Bot token", "required": True, "env_var": "BOT_TOKEN"},
+                },
+            },
+        )
+
+        class Args:
+            secret = None
+            bot_token = None
+            admin_telegram_ids = None
+            telegram_webhook_secret = None
+            non_interactive = True
+
+        with self.assertRaises(SystemExit) as error:
+            collect_secret_values(Args(), [module], interactive=False)
+        self.assertIn("Missing required secrets", str(error.exception))
 
     def test_remove_managed_env_block_strips_only_managed_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
