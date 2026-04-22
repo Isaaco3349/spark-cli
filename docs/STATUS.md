@@ -1,10 +1,57 @@
 # Spark CLI — Status Audit
 
-**Last updated:** 2026-04-22 (end of day)
+**Last updated:** 2026-04-23 (launch prep)
 **Scope:** the `spark-cli` spike at `C:\Users\USER\Desktop\spark-cli`
-**Source of truth:** `src/spark_cli/cli.py` (2397 LOC) + `tests/test_cli.py` (1250 LOC)
-**Test state:** 83/83 passing on this machine
-**Branch:** `master` at commit `99a2e04`
+**Source of truth:** `src/spark_cli/cli.py` (~2420 LOC) + `tests/test_cli.py` (~1270 LOC)
+**Test state:** 84/84 passing on this machine
+**Branch:** `master` at commit `b05cb43`
+
+---
+
+## Launch readiness (2026-04-23)
+
+Fresh-machine install path is verified end to end.
+
+| Check | Result |
+|---|---|
+| `spark-cli` repo public on GitHub | `vibeforge1111/spark-cli` (PRIVATE, MIT) |
+| `pip install -e .` works from clone | yes |
+| `python -m pytest tests/ -q` | 84 pass |
+| Three starter modules have `spark.toml` on `origin/main` | yes: `spark-telegram-bot`, `vibeship-spawner-ui`, `spark-intelligence-builder` |
+| `registry.json` points at git URLs | yes (commit `b05cb43`) |
+| `discover_modules` + `ensure_bundle_modules_available` clones bundle members on first run | verified against all three starter repos |
+| Keychain round-trip against Windows Credential Manager | verified |
+| `spark init <name>` scaffolds a module that installs + passes healthcheck | verified |
+
+### Reconciliation log for `spark-intelligence-builder`
+
+The local `~/Desktop/spark-intelligence-builder` branch was 97 ahead / 7 behind
+`origin/main` going into launch prep. Reconciled via themed squash-merged PRs:
+
+| PR | Title | Commits | Sha on main |
+|---|---|---|---|
+| #14 | Define builder installer contract | 1 | `9933362` |
+| #15 | Batch 2: Telegram memory lanes and stress tests | 39 | `d782937` |
+| #16 | Batch 3: Runtime architecture, evidence observations, bootstrap | 13 | `48769b3` |
+| #17 | Batch 5: Memory architecture, beliefs, Phase A + Phase B | 49 | `36b683c` |
+| (none) | Batch 4 shadow-validation (6 commits) | dropped as patch-id-equivalent to origin's PR #13 | — |
+
+One merge conflict across the sequence: Batch 3's `c60a845` vs Batch 1 on
+`README.md` (both added a "Current Live Telegram Architecture" section).
+Resolved by keeping the Batch 1 version; the rest of `c60a845`'s edits to
+the README's ingress-ownership section applied cleanly.
+
+**Local-history note.** `~/Desktop/spark-intelligence-builder` is now 108
+ahead / 11 behind `origin/main` because the original 97 commits are still
+in local history while origin has 4 new squash commits. The *content* is
+fully reconciled. To finish the local reconciliation later, pick one:
+- `git fetch && git reset --hard origin/main` (destroys local history)
+- `git pull --rebase origin main` (empties dropped, possible conflicts)
+- `git merge origin/main` (preserves divergent history with a merge commit)
+
+Not a launch blocker.
+
+---
 
 This document is the ground-truth index of what the spike does, what it does
 not, and where to look. Update it at the end of any session that changes the
