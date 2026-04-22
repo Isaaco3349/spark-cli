@@ -1,0 +1,3 @@
+[console_scripts]
+spark = spark_cli.cli:main
+spark-local = spark_cli.cli:main
