@@ -25,8 +25,20 @@ LOG_DIR = SPARK_HOME / "logs"
 REGISTRY_PATH = STATE_DIR / "installed.json"
 CONFIG_PATH = STATE_DIR / "setup.json"
 PID_PATH = STATE_DIR / "pids.json"
+SECRETS_INDEX_PATH = CONFIG_DIR / "secrets_index.json"
+SECRETS_FILE_PATH = CONFIG_DIR / "secrets.local.json"
+KEYCHAIN_SERVICE = "spark-cli"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_REGISTRY_PATH = REPO_ROOT / "registry.json"
+
+try:  # keyring is an optional runtime dep; we degrade gracefully without it.
+    import keyring as _keyring
+    import keyring.errors as _keyring_errors
+    HAS_KEYRING = True
+except ImportError:  # pragma: no cover - exercised only on minimal installs
+    _keyring = None
+    _keyring_errors = None
+    HAS_KEYRING = False
 
 
 @dataclass
@@ -132,6 +144,129 @@ def load_registry_definition() -> dict[str, Any]:
 def ensure_state_dirs() -> None:
     for path in (SPARK_HOME, STATE_DIR, CONFIG_DIR, MODULE_CONFIG_DIR, LOG_DIR):
         path.mkdir(parents=True, exist_ok=True)
+
+
+def keychain_available() -> bool:
+    if not HAS_KEYRING:
+        return False
+    try:
+        _keyring.get_password(KEYCHAIN_SERVICE, "__spark_probe__")
+    except Exception:
+        return False
+    return True
+
+
+def load_secrets_index() -> dict[str, str]:
+    return load_json(SECRETS_INDEX_PATH, {})
+
+
+def save_secrets_index(index: dict[str, str]) -> None:
+    save_json(SECRETS_INDEX_PATH, index)
+
+
+def store_secret(secret_id: str, value: str, preferred: str = "keychain") -> str:
+    """Store a secret value. Returns the backend actually used ('keychain' or 'file')."""
+    ensure_state_dirs()
+    index = load_secrets_index()
+    if preferred == "keychain" and keychain_available():
+        try:
+            _keyring.set_password(KEYCHAIN_SERVICE, secret_id, value)
+            index[secret_id] = "keychain"
+            save_secrets_index(index)
+            return "keychain"
+        except Exception:
+            pass
+    file_secrets = load_json(SECRETS_FILE_PATH, {})
+    file_secrets[secret_id] = value
+    save_json(SECRETS_FILE_PATH, file_secrets)
+    try:
+        os.chmod(SECRETS_FILE_PATH, 0o600)
+    except OSError:
+        pass
+    index[secret_id] = "file"
+    save_secrets_index(index)
+    return "file"
+
+
+def fetch_secret(secret_id: str) -> str | None:
+    index = load_secrets_index()
+    backend = index.get(secret_id)
+    if backend == "keychain" and HAS_KEYRING:
+        try:
+            return _keyring.get_password(KEYCHAIN_SERVICE, secret_id)
+        except Exception:
+            return None
+    if backend == "file":
+        return load_json(SECRETS_FILE_PATH, {}).get(secret_id)
+    return None
+
+
+def delete_secret(secret_id: str) -> bool:
+    index = load_secrets_index()
+    backend = index.pop(secret_id, None)
+    removed = False
+    if backend == "keychain" and HAS_KEYRING:
+        try:
+            _keyring.delete_password(KEYCHAIN_SERVICE, secret_id)
+            removed = True
+        except Exception:
+            pass
+    if backend == "file":
+        file_secrets = load_json(SECRETS_FILE_PATH, {})
+        if secret_id in file_secrets:
+            file_secrets.pop(secret_id)
+            save_json(SECRETS_FILE_PATH, file_secrets)
+            removed = True
+    if backend is not None:
+        save_secrets_index(index)
+    return removed
+
+
+def list_stored_secrets() -> dict[str, str]:
+    return dict(load_secrets_index())
+
+
+def module_secret_env_bindings(module: Module) -> list[dict[str, str]]:
+    """Return env_var bindings for secrets the module declares in [needs.secrets]."""
+    bindings: list[dict[str, str]] = []
+    for secret_id in module.needed_secrets:
+        definition = module.resolve_secret_definition(secret_id)
+        env_var = definition.get("env_var")
+        if not env_var:
+            continue
+        bindings.append(
+            {
+                "secret_id": str(secret_id),
+                "env_var": str(env_var),
+                "storage": str(definition.get("storage") or "file"),
+            }
+        )
+    return bindings
+
+
+def split_secret_bindings(module: Module) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Return (file_or_env_backed, keychain_backed) bindings for a module."""
+    bindings = module_secret_env_bindings(module)
+    keychain_backed = [b for b in bindings if b["storage"] == "keychain"]
+    other_backed = [b for b in bindings if b["storage"] != "keychain"]
+    return other_backed, keychain_backed
+
+
+def strip_keychain_env_vars(env_values: dict[str, str], module: Module) -> dict[str, str]:
+    _, keychain_backed = split_secret_bindings(module)
+    keychain_env_vars = {b["env_var"] for b in keychain_backed}
+    return {key: value for key, value in env_values.items() if key not in keychain_env_vars}
+
+
+def keychain_env_for_module(module: Module) -> dict[str, str]:
+    """Resolve keychain-backed env vars at start time, skipping any that are not stored."""
+    env: dict[str, str] = {}
+    _, keychain_backed = split_secret_bindings(module)
+    for binding in keychain_backed:
+        value = fetch_secret(binding["secret_id"])
+        if value is not None:
+            env[binding["env_var"]] = value
+    return env
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -886,9 +1021,10 @@ def cmd_setup(args: argparse.Namespace) -> int:
             skip_install_commands=args.skip_install_commands,
         )
 
+    keychain_report = persist_keychain_secrets(bundle, secret_values)
     generated_envs = build_module_envs(args, modules, secret_values)
     for module in bundle:
-        env_values = generated_envs.get(module.name, {})
+        env_values = strip_keychain_env_vars(generated_envs.get(module.name, {}), module)
         generated_path = generated_module_env_path(module)
         write_generated_env(generated_path, env_values)
         env_path = module_env_path(module)
@@ -900,7 +1036,29 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print(f"Telegram ingress owner: {ingress_owner.name}")
     print("Bot token routed only to spark-telegram-bot.")
     print(f"Generated module config dir: {MODULE_CONFIG_DIR}")
+    if keychain_report:
+        for secret_id, backend in sorted(keychain_report.items()):
+            print(f"Secret {secret_id} -> {backend}")
     return 0
+
+
+def persist_keychain_secrets(bundle: list[Module], secret_values: dict[str, str]) -> dict[str, str]:
+    """Store each keychain-declared secret from the bundle; return {secret_id: backend_used}."""
+    report: dict[str, str] = {}
+    seen: set[str] = set()
+    for module in bundle:
+        _, keychain_backed = split_secret_bindings(module)
+        for binding in keychain_backed:
+            secret_id = binding["secret_id"]
+            if secret_id in seen:
+                continue
+            value = secret_values.get(secret_id)
+            if not value:
+                continue
+            backend = store_secret(secret_id, value, preferred="keychain")
+            report[secret_id] = backend
+            seen.add(secret_id)
+    return report
 
 
 def run_shell(command: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -1177,6 +1335,11 @@ def start_module(module: Module) -> bool:
     if os.name == "nt":
         creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
 
+    subprocess_env = os.environ.copy()
+    keychain_env = keychain_env_for_module(module)
+    if keychain_env:
+        subprocess_env.update(keychain_env)
+
     process = subprocess.Popen(
         command,
         cwd=str(module.path),
@@ -1184,6 +1347,7 @@ def start_module(module: Module) -> bool:
         stdout=log_handle,
         stderr=subprocess.STDOUT,
         creationflags=creationflags,
+        env=subprocess_env,
     )
     pids[module.name] = {
         "pid": process.pid,
@@ -1274,6 +1438,51 @@ def follow_log_file(path: Path) -> None:
                 sys.stdout.flush()
         except KeyboardInterrupt:
             return
+
+
+def cmd_secrets_list(_: argparse.Namespace) -> int:
+    index = list_stored_secrets()
+    if not index:
+        print("No stored secrets.")
+        return 0
+    print(f"{len(index)} secret(s) stored:")
+    for secret_id, backend in sorted(index.items()):
+        print(f"  {secret_id}\t[{backend}]")
+    return 0
+
+
+def cmd_secrets_set(args: argparse.Namespace) -> int:
+    if args.value is not None:
+        value = args.value
+    elif stdin_is_tty():
+        value = getpass.getpass(f"  Paste value for {args.secret_id}: ")
+    else:
+        value = sys.stdin.read().strip()
+    if not value:
+        raise SystemExit(f"Refusing to store empty value for {args.secret_id}.")
+    backend = store_secret(args.secret_id, value, preferred=args.backend)
+    print(f"Stored {args.secret_id} in {backend}.")
+    return 0
+
+
+def cmd_secrets_get(args: argparse.Namespace) -> int:
+    value = fetch_secret(args.secret_id)
+    if value is None:
+        raise SystemExit(f"No value stored for {args.secret_id}.")
+    if args.reveal:
+        print(value)
+    else:
+        masked = value[:4] + "..." + value[-2:] if len(value) > 6 else "***"
+        print(f"{args.secret_id} -> {masked} (pass --reveal to print full value)")
+    return 0
+
+
+def cmd_secrets_delete(args: argparse.Namespace) -> int:
+    if delete_secret(args.secret_id):
+        print(f"Deleted {args.secret_id}.")
+        return 0
+    print(f"No value stored for {args.secret_id}.")
+    return 1
 
 
 def cmd_logs(args: argparse.Namespace) -> int:
@@ -1406,6 +1615,27 @@ def build_parser() -> argparse.ArgumentParser:
     stop_parser = subparsers.add_parser("stop", help="Stop tracked Spark processes")
     stop_parser.add_argument("target", nargs="?")
     stop_parser.set_defaults(func=cmd_stop)
+
+    secrets_parser = subparsers.add_parser("secrets", help="Manage stored secrets (Windows Credential Manager or file fallback)")
+    secrets_sub = secrets_parser.add_subparsers(dest="secrets_command", required=True)
+
+    secrets_list_parser = secrets_sub.add_parser("list", help="List stored secret ids and their backend")
+    secrets_list_parser.set_defaults(func=cmd_secrets_list)
+
+    secrets_set_parser = secrets_sub.add_parser("set", help="Store or rotate a secret")
+    secrets_set_parser.add_argument("secret_id")
+    secrets_set_parser.add_argument("--value", help="Pass the value directly (otherwise prompted or read from stdin)")
+    secrets_set_parser.add_argument("--backend", choices=["keychain", "file"], default="keychain")
+    secrets_set_parser.set_defaults(func=cmd_secrets_set)
+
+    secrets_get_parser = secrets_sub.add_parser("get", help="Read a stored secret (masked by default)")
+    secrets_get_parser.add_argument("secret_id")
+    secrets_get_parser.add_argument("--reveal", action="store_true", help="Print the full value")
+    secrets_get_parser.set_defaults(func=cmd_secrets_get)
+
+    secrets_delete_parser = secrets_sub.add_parser("delete", help="Remove a stored secret")
+    secrets_delete_parser.add_argument("secret_id")
+    secrets_delete_parser.set_defaults(func=cmd_secrets_delete)
 
     logs_parser = subparsers.add_parser("logs", help="Show process logs for an installed module")
     logs_parser.add_argument("target")

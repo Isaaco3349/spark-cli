@@ -16,9 +16,18 @@ from spark_cli.cli import (
     collect_secret_values,
     CONFIG_PATH,
     detect_runtime_binary,
+    delete_secret,
+    fetch_secret,
     install_module_record,
+    keychain_env_for_module,
+    list_stored_secrets,
     load_json,
     module_log_path,
+    module_secret_env_bindings,
+    persist_keychain_secrets,
+    split_secret_bindings,
+    store_secret,
+    strip_keychain_env_vars,
     tail_log_lines,
     Module,
     MODULE_CONFIG_DIR,
@@ -471,6 +480,121 @@ class SparkCliTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as error:
             collect_secret_values(Args(), [module], interactive=False)
         self.assertIn("Missing required secrets", str(error.exception))
+
+    def test_module_secret_env_bindings_returns_env_var_mapping(self) -> None:
+        module = Module(
+            name="spark-telegram-bot",
+            path=Path("C:/tmp/spark-telegram-bot"),
+            manifest={
+                "module": {"name": "spark-telegram-bot", "version": "1.0.0", "kind": "service", "plane": "ingress"},
+                "needs": {"secrets": ["telegram.bot_token", "telegram.admin_ids"]},
+                "secrets": {
+                    "telegram_bot_token": {"env_var": "BOT_TOKEN", "storage": "keychain"},
+                    "telegram_admin_ids": {"env_var": "ADMIN_TELEGRAM_IDS", "storage": "file"},
+                },
+            },
+        )
+        bindings = module_secret_env_bindings(module)
+        by_id = {b["secret_id"]: b for b in bindings}
+        self.assertEqual(by_id["telegram.bot_token"]["env_var"], "BOT_TOKEN")
+        self.assertEqual(by_id["telegram.bot_token"]["storage"], "keychain")
+        self.assertEqual(by_id["telegram.admin_ids"]["storage"], "file")
+
+    def test_split_secret_bindings_separates_keychain_and_file(self) -> None:
+        module = Module(
+            name="spark-telegram-bot",
+            path=Path("C:/tmp/spark-telegram-bot"),
+            manifest={
+                "module": {"name": "spark-telegram-bot", "version": "1.0.0", "kind": "service", "plane": "ingress"},
+                "needs": {"secrets": ["telegram.bot_token", "telegram.admin_ids"]},
+                "secrets": {
+                    "telegram_bot_token": {"env_var": "BOT_TOKEN", "storage": "keychain"},
+                    "telegram_admin_ids": {"env_var": "ADMIN_TELEGRAM_IDS", "storage": "file"},
+                },
+            },
+        )
+        file_backed, keychain_backed = split_secret_bindings(module)
+        self.assertEqual([b["env_var"] for b in file_backed], ["ADMIN_TELEGRAM_IDS"])
+        self.assertEqual([b["env_var"] for b in keychain_backed], ["BOT_TOKEN"])
+
+    def test_strip_keychain_env_vars_removes_keychain_backed_keys(self) -> None:
+        module = Module(
+            name="spark-telegram-bot",
+            path=Path("C:/tmp/spark-telegram-bot"),
+            manifest={
+                "module": {"name": "spark-telegram-bot", "version": "1.0.0", "kind": "service", "plane": "ingress"},
+                "needs": {"secrets": ["telegram.bot_token"]},
+                "secrets": {
+                    "telegram_bot_token": {"env_var": "BOT_TOKEN", "storage": "keychain"},
+                },
+            },
+        )
+        result = strip_keychain_env_vars(
+            {"BOT_TOKEN": "abc", "ADMIN_TELEGRAM_IDS": "123", "SPAWNER_UI_URL": "http://x"},
+            module,
+        )
+        self.assertEqual(result, {"ADMIN_TELEGRAM_IDS": "123", "SPAWNER_UI_URL": "http://x"})
+
+    def test_store_and_fetch_secret_roundtrip_via_file_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            index_path = Path(tmp_dir) / "secrets_index.json"
+            file_path = Path(tmp_dir) / "secrets.local.json"
+            with patch("spark_cli.cli.SECRETS_INDEX_PATH", index_path), \
+                 patch("spark_cli.cli.SECRETS_FILE_PATH", file_path), \
+                 patch("spark_cli.cli.keychain_available", return_value=False):
+                backend = store_secret("telegram.bot_token", "abc", preferred="keychain")
+                self.assertEqual(backend, "file")
+                self.assertEqual(fetch_secret("telegram.bot_token"), "abc")
+                self.assertEqual(list_stored_secrets(), {"telegram.bot_token": "file"})
+                self.assertTrue(delete_secret("telegram.bot_token"))
+                self.assertIsNone(fetch_secret("telegram.bot_token"))
+                self.assertEqual(list_stored_secrets(), {})
+
+    def test_persist_keychain_secrets_stores_only_keychain_declared(self) -> None:
+        gateway = Module(
+            name="spark-telegram-bot",
+            path=Path("C:/tmp/spark-telegram-bot"),
+            manifest={
+                "module": {"name": "spark-telegram-bot", "version": "1.0.0", "kind": "service", "plane": "ingress"},
+                "needs": {"secrets": ["telegram.bot_token", "telegram.admin_ids"]},
+                "secrets": {
+                    "telegram_bot_token": {"env_var": "BOT_TOKEN", "storage": "keychain"},
+                    "telegram_admin_ids": {"env_var": "ADMIN_TELEGRAM_IDS", "storage": "file"},
+                },
+            },
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("spark_cli.cli.SECRETS_INDEX_PATH", Path(tmp_dir) / "idx.json"), \
+                 patch("spark_cli.cli.SECRETS_FILE_PATH", Path(tmp_dir) / "file.json"), \
+                 patch("spark_cli.cli.keychain_available", return_value=False):
+                report = persist_keychain_secrets(
+                    [gateway],
+                    {"telegram.bot_token": "abc", "telegram.admin_ids": "123"},
+                )
+                self.assertEqual(report, {"telegram.bot_token": "file"})
+                self.assertEqual(fetch_secret("telegram.bot_token"), "abc")
+                self.assertIsNone(fetch_secret("telegram.admin_ids"))
+
+    def test_keychain_env_for_module_returns_only_stored_bindings(self) -> None:
+        gateway = Module(
+            name="spark-telegram-bot",
+            path=Path("C:/tmp/spark-telegram-bot"),
+            manifest={
+                "module": {"name": "spark-telegram-bot", "version": "1.0.0", "kind": "service", "plane": "ingress"},
+                "needs": {"secrets": ["telegram.bot_token", "telegram.webhook_secret"]},
+                "secrets": {
+                    "telegram_bot_token": {"env_var": "BOT_TOKEN", "storage": "keychain"},
+                    "telegram_webhook_secret": {"env_var": "TELEGRAM_WEBHOOK_SECRET", "storage": "keychain"},
+                },
+            },
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("spark_cli.cli.SECRETS_INDEX_PATH", Path(tmp_dir) / "idx.json"), \
+                 patch("spark_cli.cli.SECRETS_FILE_PATH", Path(tmp_dir) / "file.json"), \
+                 patch("spark_cli.cli.keychain_available", return_value=False):
+                store_secret("telegram.bot_token", "abc", preferred="keychain")
+                env = keychain_env_for_module(gateway)
+                self.assertEqual(env, {"BOT_TOKEN": "abc"})
 
     def test_tail_log_lines_returns_trailing_slice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
