@@ -8,11 +8,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 from spark_cli.cli import (
+    build_module_repair_hints,
+    build_status_repair_hints,
     build_module_envs,
     collect_secret_requirements,
     collect_secret_values,
+    CONFIG_PATH,
+    install_module_record,
+    load_json,
     Module,
     MODULE_CONFIG_DIR,
+    REGISTRY_PATH,
     detect_uninstall_blockers,
     detect_capability_conflicts,
     detect_ingress_owner,
@@ -26,7 +32,6 @@ from spark_cli.cli import (
     summarize_command_output,
     update_setup_state_after_uninstall,
     update_env_file,
-    CONFIG_PATH,
 )
 
 
@@ -252,6 +257,104 @@ class SparkCliTests(unittest.TestCase):
             )
             execute_install_commands(module)
             self.assertEqual(marker_path.read_text(encoding="utf-8"), "ok")
+
+    def test_install_module_record_writes_provenance_metadata(self) -> None:
+        original = REGISTRY_PATH.read_text(encoding="utf-8") if REGISTRY_PATH.exists() else None
+        try:
+            module = Module(
+                name="spark-telegram-bot",
+                path=Path("C:/tmp/spark-telegram-bot"),
+                manifest={
+                    "module": {
+                        "name": "spark-telegram-bot",
+                        "version": "1.0.0",
+                        "kind": "service",
+                        "plane": "ingress",
+                        "description": "Telegram gateway",
+                    }
+                },
+            )
+            install_module_record(
+                module,
+                operation="install",
+                source_kind="bundle",
+                source_target="telegram-starter",
+                bundle_name="telegram-starter",
+                skip_install_commands=True,
+            )
+            install_module_record(
+                module,
+                operation="update",
+                source_kind="bundle",
+                source_target="telegram-starter",
+                bundle_name="telegram-starter",
+                skip_install_commands=False,
+            )
+            payload = load_json(REGISTRY_PATH, {})
+            record = payload["spark-telegram-bot"]
+            self.assertEqual(record["installed_via"]["kind"], "bundle")
+            self.assertEqual(record["installed_via"]["target"], "telegram-starter")
+            self.assertEqual(record["installed_via"]["bundle"], "telegram-starter")
+            self.assertEqual(record["bundle_provenance"], ["telegram-starter"])
+            self.assertEqual(record["last_install"]["status"], "ok")
+            self.assertTrue(record["last_install"]["skip_install_commands"])
+            self.assertEqual(record["last_update"]["status"], "ok")
+            self.assertFalse(record["last_update"]["skip_install_commands"])
+            self.assertEqual(record["installed_at"], record["last_install"]["at"])
+            self.assertIn("updated_at", record)
+        finally:
+            if original is not None:
+                REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+                REGISTRY_PATH.write_text(original, encoding="utf-8")
+            elif REGISTRY_PATH.exists():
+                REGISTRY_PATH.unlink()
+
+    def test_build_module_repair_hints_reports_missing_dependency_and_config_regen(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            module = Module(
+                name="repair-target",
+                path=Path(tmp_dir),
+                manifest={
+                    "module": {"name": "repair-target", "version": "0.1.0", "kind": "service", "plane": "execution"},
+                    "needs": {"modules": ["spark-intelligence-builder"]},
+                    "config": {"output": ".env", "installer_owned": True},
+                    "healthcheck": {"failure_hint": "Run the module doctor."},
+                },
+            )
+            result = {"name": "repair-target", "healthy": False, "failure_hint": "Run the module doctor."}
+            hints = build_module_repair_hints(module, result, {"repair-target": result}, {"bundle": "telegram-starter"})
+            self.assertIn("Install missing dependencies first: spark-intelligence-builder.", hints)
+            self.assertIn("Run the module doctor.", hints)
+            self.assertIn("Run `spark setup telegram-starter` to regenerate installer-owned config.", hints)
+
+    def test_build_status_repair_hints_reports_missing_ingress_owner_and_unhealthy_dependency(self) -> None:
+        builder = Module(
+            name="spark-intelligence-builder",
+            path=Path("C:/tmp/spark-intelligence-builder"),
+            manifest={
+                "module": {"name": "spark-intelligence-builder", "version": "0.1.0", "kind": "runtime", "plane": "runtime"}
+            },
+        )
+        gateway = Module(
+            name="spark-telegram-bot",
+            path=Path("C:/tmp/spark-telegram-bot"),
+            manifest={
+                "module": {"name": "spark-telegram-bot", "version": "1.0.0", "kind": "service", "plane": "ingress"},
+                "needs": {"modules": ["spark-intelligence-builder"]},
+            },
+        )
+        hints = build_status_repair_hints(
+            {gateway.name: gateway},
+            [
+                {"name": "spark-telegram-bot", "healthy": False},
+            ],
+            {"telegram_ingress_owner": "spark-intelligence-builder"},
+        )
+        self.assertIn(
+            "Configured Telegram ingress owner `spark-intelligence-builder` is not installed. Run `spark setup telegram-starter`.",
+            hints,
+        )
+        self.assertIn("spark-telegram-bot is missing dependencies: spark-intelligence-builder.", hints)
 
     def test_update_setup_state_after_uninstall_clears_empty_setup(self) -> None:
         original = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None

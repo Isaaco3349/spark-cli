@@ -149,6 +149,10 @@ def load_module(path: Path) -> Module:
     return Module(name=name, path=path, manifest=manifest)
 
 
+def timestamp_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 def parse_secret_pairs(raw_pairs: list[str] | None) -> dict[str, str]:
     secrets: dict[str, str] = {}
     for raw in raw_pairs or []:
@@ -404,15 +408,69 @@ def resolve_install_target(target: str, modules: dict[str, Module]) -> Module:
     raise SystemExit(f"Unknown module target: {target}")
 
 
-def install_module_record(module: Module) -> None:
+def install_module_record(
+    module: Module,
+    *,
+    operation: str,
+    source_kind: str,
+    source_target: str,
+    skip_install_commands: bool,
+    bundle_name: str | None = None,
+) -> None:
     installed = load_json(REGISTRY_PATH, {})
+    existing = dict(installed.get(module.name, {}))
+    registry_metadata = load_registry_definition().get("modules", {}).get(module.name, {})
+    now = timestamp_now()
+    installed_via = dict(existing.get("installed_via", {}))
+    if not installed_via:
+        installed_via = {
+            "kind": source_kind,
+            "target": source_target,
+        }
+        if bundle_name:
+            installed_via["bundle"] = bundle_name
+
+    bundle_provenance = list(existing.get("bundle_provenance", []))
+    if bundle_name and bundle_name not in bundle_provenance:
+        bundle_provenance.append(bundle_name)
+
     installed[module.name] = {
+        **existing,
         "path": str(module.path),
+        "source": str(module.path),
         "version": module.version,
         "kind": module.kind,
         "plane": module.plane,
+        "summary": str(registry_metadata.get("summary") or module.manifest.get("module", {}).get("description", "")),
+        "blessed": bool(registry_metadata.get("blessed", False)),
+        "installed_at": existing.get("installed_at") or now,
+        "updated_at": now,
+        "installed_via": installed_via,
+        "bundle_provenance": bundle_provenance,
+    }
+    outcome_key = "last_install" if operation == "install" else "last_update"
+    installed[module.name][outcome_key] = {
+        "status": "ok",
+        "at": now,
+        "source_kind": source_kind,
+        "source_target": source_target,
+        "bundle": bundle_name,
+        "skip_install_commands": skip_install_commands,
     }
     save_json(REGISTRY_PATH, installed)
+
+
+def describe_installed_record(module: Module, record: dict[str, Any]) -> dict[str, Any]:
+    registry_metadata = load_registry_definition().get("modules", {}).get(module.name, {})
+    installed = dict(record)
+    installed.setdefault("path", str(module.path))
+    installed.setdefault("source", str(module.path))
+    installed.setdefault("version", module.version)
+    installed.setdefault("kind", module.kind)
+    installed.setdefault("plane", module.plane)
+    installed.setdefault("summary", str(registry_metadata.get("summary") or module.manifest.get("module", {}).get("description", "")))
+    installed.setdefault("blessed", bool(registry_metadata.get("blessed", False)))
+    return installed
 
 
 def remove_module_record(module_name: str) -> None:
@@ -433,7 +491,6 @@ def print_install_summary(modules: list[Module]) -> None:
 def install_modules(modules: list[Module]) -> None:
     print_install_summary(modules)
     for module in modules:
-        install_module_record(module)
         print(f"Installed {module.name} from {module.path}")
         if "telegram.ingress" in module.capabilities:
             print("This module declares telegram.ingress and should be the only live Telegram token owner.")
@@ -523,6 +580,7 @@ def evaluate_module_health(module: Module) -> dict[str, Any]:
     result = run_shell(command, module.path)
     detail = summarize_command_output(result)
     failure_hint = str(module.manifest.get("healthcheck", {}).get("failure_hint", "")).strip() or None
+    success_hint = str(module.manifest.get("healthcheck", {}).get("success_hint", "")).strip() or None
     return {
         "name": module.name,
         "version": module.version,
@@ -532,7 +590,107 @@ def evaluate_module_health(module: Module) -> dict[str, Any]:
         "detail": detail,
         "healthcheck_command": command,
         "failure_hint": failure_hint,
+        "success_hint": success_hint,
     }
+
+
+def determine_install_source_kind(target: str, modules: dict[str, Module]) -> str:
+    if target in load_registry_definition().get("modules", {}):
+        return "registry"
+    if Path(target).exists():
+        return "local_path"
+    if target in modules:
+        return "discovered"
+    return "unknown"
+
+
+def dependency_issues_for_module(module: Module, module_results: dict[str, dict[str, Any]]) -> tuple[list[str], list[str]]:
+    missing_dependencies: list[str] = []
+    unhealthy_dependencies: list[str] = []
+    for dependency in module.needs_modules:
+        dependency_result = module_results.get(dependency)
+        if dependency_result is None:
+            missing_dependencies.append(dependency)
+            continue
+        if dependency_result.get("healthy") is False:
+            unhealthy_dependencies.append(dependency)
+    return missing_dependencies, unhealthy_dependencies
+
+
+def build_module_repair_hints(
+    module: Module,
+    result: dict[str, Any],
+    module_results: dict[str, dict[str, Any]],
+    setup_state: dict[str, Any],
+) -> list[str]:
+    hints: list[str] = []
+    missing_dependencies, unhealthy_dependencies = dependency_issues_for_module(module, module_results)
+    if missing_dependencies:
+        hints.append(
+            "Install missing dependencies first: " + ", ".join(missing_dependencies) + "."
+        )
+    if unhealthy_dependencies:
+        hints.append(
+            "Repair dependency health first: " + ", ".join(unhealthy_dependencies) + "."
+        )
+    if result.get("healthy") is False and result.get("failure_hint"):
+        hints.append(str(result["failure_hint"]))
+    if module.manifest.get("config", {}).get("installer_owned"):
+        generated_path = generated_module_env_path(module)
+        env_path = module_env_path(module)
+        if env_path is not None and not generated_path.exists():
+            bundle_name = setup_state.get("bundle") or "telegram-starter"
+            hints.append(f"Run `spark setup {bundle_name}` to regenerate installer-owned config.")
+    deduped: list[str] = []
+    for hint in hints:
+        if hint not in deduped:
+            deduped.append(hint)
+    return deduped
+
+
+def build_status_repair_hints(
+    modules: dict[str, Module],
+    module_results: list[dict[str, Any]],
+    setup_state: dict[str, Any],
+) -> list[str]:
+    hints: list[str] = []
+    bundle_name = setup_state.get("bundle")
+    installed_names = set(modules)
+    if bundle_name:
+        expected_modules: set[str] | None = None
+        try:
+            expected_modules = set(resolve_bundle_names(str(bundle_name)))
+        except SystemExit:
+            hints.append(
+                f"Configured bundle `{bundle_name}` is not present in the local registry. Run `spark setup telegram-starter`."
+            )
+        if expected_modules is not None:
+            missing_modules = sorted(expected_modules - installed_names)
+            if missing_modules:
+                hints.append(
+                    f"Setup bundle `{bundle_name}` is incomplete. Reinstall missing modules: {', '.join(missing_modules)}."
+                )
+    ingress_owner = setup_state.get("telegram_ingress_owner")
+    if ingress_owner and ingress_owner not in installed_names:
+        hints.append(
+            f"Configured Telegram ingress owner `{ingress_owner}` is not installed. Run `spark setup {bundle_name or 'telegram-starter'}`."
+        )
+    module_results_by_name = {item["name"]: item for item in module_results}
+    for module in modules.values():
+        missing_dependencies, unhealthy_dependencies = dependency_issues_for_module(module, module_results_by_name)
+        if missing_dependencies:
+            hints.append(
+                f"{module.name} is missing dependencies: {', '.join(missing_dependencies)}."
+            )
+        if unhealthy_dependencies:
+            hints.append(
+                f"{module.name} is blocked on unhealthy dependencies: {', '.join(unhealthy_dependencies)}."
+            )
+    deduped: list[str] = []
+    for hint in hints:
+        if hint not in deduped:
+            deduped.append(hint)
+    return deduped
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -550,14 +708,31 @@ def cmd_install(args: argparse.Namespace) -> int:
             for module in bundle_modules:
                 execute_install_commands(module)
         install_modules(bundle_modules)
+        for module in bundle_modules:
+            install_module_record(
+                module,
+                operation="install",
+                source_kind="bundle",
+                source_target=args.target,
+                bundle_name=args.target,
+                skip_install_commands=args.skip_install_commands,
+            )
         return 0
     module = resolve_install_target(args.target, modules)
+    source_kind = determine_install_source_kind(args.target, modules)
     conflicts = detect_capability_conflicts([module], installed_modules)
     if conflicts:
         raise SystemExit("Cannot install module because of capability conflicts: " + "; ".join(conflicts))
     if not args.skip_install_commands:
         execute_install_commands(module)
     install_modules([module])
+    install_module_record(
+        module,
+        operation="install",
+        source_kind=source_kind,
+        source_target=args.target,
+        skip_install_commands=args.skip_install_commands,
+    )
     return 0
 
 
@@ -584,6 +759,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
         for module in bundle:
             execute_install_commands(module)
     install_modules(bundle)
+    for module in bundle:
+        install_module_record(
+            module,
+            operation="install",
+            source_kind="bundle",
+            source_target=args.bundle,
+            bundle_name=args.bundle,
+            skip_install_commands=args.skip_install_commands,
+        )
 
     generated_envs = build_module_envs(args, modules, secret_values)
     for module in bundle:
@@ -640,13 +824,25 @@ def collect_status_payload() -> dict[str, Any]:
 
     modules = {name: load_module(Path(data["path"])) for name, data in installed.items()}
     module_results = [evaluate_module_health(module) for module in modules.values()]
+    module_results_by_name = {item["name"]: item for item in module_results}
+    for item in module_results:
+        item["installed"] = describe_installed_record(modules[item["name"]], dict(installed.get(item["name"], {})))
+        item["repair_hints"] = build_module_repair_hints(
+            modules[item["name"]],
+            item,
+            module_results_by_name,
+            setup_state,
+        )
+    repair_hints = build_status_repair_hints(modules, module_results, setup_state)
+    ok = all(item["healthy"] is not False for item in module_results) and not repair_hints
     return {
-        "ok": all(item["healthy"] is not False for item in module_results),
+        "ok": ok,
         "summary": "Spark CLI spike status",
         "telegram_ingress_owner": setup_state.get("telegram_ingress_owner"),
         "modules": module_results,
         "tracked_pids": load_pids(),
         "config_dir": str(CONFIG_DIR),
+        "repair_hints": repair_hints,
     }
 
 
@@ -665,6 +861,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     ingress_owner = payload.get("telegram_ingress_owner")
     if ingress_owner:
         print(f"Telegram ingress owner: {ingress_owner}")
+    for hint in payload.get("repair_hints", []):
+        print(f"Repair: {hint}")
     print("")
 
     exit_code = 0
@@ -677,11 +875,13 @@ def cmd_status(args: argparse.Namespace) -> int:
         else:
             marker = "[ERR]"
         detail = str(module["detail"])
-        if healthy is False and module.get("failure_hint"):
-            detail = f"{detail} -- {module['failure_hint']}"
+        if module.get("repair_hints"):
+            detail = f"{detail} -- {' '.join(module['repair_hints'])}"
         print(f"{marker} {module['name']:<26} {detail}")
         if healthy is False:
             exit_code = 1
+    if payload.get("repair_hints"):
+        exit_code = 1
     return exit_code
 
 
@@ -806,7 +1006,16 @@ def cmd_update(args: argparse.Namespace) -> int:
         if not args.skip_install_commands:
             execute_install_commands(module)
         run_module_hook(module, "post_install")
-        install_module_record(module)
+        existing_record = load_json(REGISTRY_PATH, {}).get(module.name, {})
+        installed_via = dict(existing_record.get("installed_via", {}))
+        install_module_record(
+            module,
+            operation="update",
+            source_kind=str(installed_via.get("kind", "installed")),
+            source_target=str(installed_via.get("target", module.path)),
+            bundle_name=installed_via.get("bundle"),
+            skip_install_commands=args.skip_install_commands,
+        )
         sync_generated_env_to_module(module)
         print(f"Updated {module.name} from {module.path}")
     return 0

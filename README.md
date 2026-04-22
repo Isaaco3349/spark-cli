@@ -12,6 +12,8 @@ Current scope:
 - route the Telegram bot token only to `spark-telegram-bot`
 - run module healthchecks through `spark status`
 - emit machine-readable diagnostics through `spark status --json` and `spark doctor --json`
+- persist install provenance in `~/.spark/state/installed.json`
+- surface dependency-aware repair hints in `status` and `doctor`
 - start and stop startable modules through `spark start` and `spark stop`
 
 This is intentionally a local-first spike, not the final packaged installer.
@@ -67,9 +69,15 @@ The current supported ownership rule remains:
 ## Lifecycle
 
 - `install <module|bundle>` records modules from the local registry or a local repo path and can execute manifest `[install.dev]` commands
+- installed records now keep source path, installed-via metadata, bundle provenance, and last install/update outcome
 - `setup <bundle>` installs the bundle, can execute manifest install commands, and writes generated module config
 - `update <module|bundle>` refreshes installed metadata, can rerun manifest install commands, and reapplies generated env to module `.env` files
 - `uninstall <module|bundle>` removes installed state, deletes generated module env files, removes managed `.env` blocks, and repairs bundle setup state
+
+### Status Output
+
+- `status` now reports repair hints when a module is red because one of its declared `needs.modules` dependencies is missing or unhealthy
+- `status --json` and `doctor --json` include an `installed` block per module so the dashboard can show source and provenance without reparsing state files
 
 ### Safety Flags
 
