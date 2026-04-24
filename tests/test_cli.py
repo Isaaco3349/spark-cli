@@ -1176,6 +1176,9 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("-m pip install -e .", rewritten)
         self.assertNotEqual(rewritten, "python -m pip install -e .")
         self.assertIn(str(Path(sys.executable)), rewritten)
+        uv_rewritten = command_with_managed_python("uv pip install -e .")
+        self.assertIn("-m pip install -e .", uv_rewritten)
+        self.assertNotIn("uv pip", uv_rewritten)
 
     def test_execute_install_commands_uses_managed_python_for_python_commands(self) -> None:
         module = Module(

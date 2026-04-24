@@ -1751,6 +1751,8 @@ def command_with_managed_python(command: str) -> str:
     leading = command[: len(command) - len(stripped)]
     managed_python = quote_managed_python()
     rewrites = (
+        ("uv pip install", f"{managed_python} -m pip install"),
+        ("uv pip ", f"{managed_python} -m pip "),
         ("python -m pip", f"{managed_python} -m pip"),
         ("python3 -m pip", f"{managed_python} -m pip"),
         ("pip ", f"{managed_python} -m pip "),
