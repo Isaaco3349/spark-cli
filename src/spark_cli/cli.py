@@ -1715,6 +1715,24 @@ def save_pids(payload: dict[str, Any]) -> None:
 def pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            still_active = 259
+            handle = ctypes.windll.kernel32.OpenProcess(process_query_limited_information, False, pid)
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == still_active
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
     except OSError:
@@ -2299,7 +2317,13 @@ def build_parser() -> argparse.ArgumentParser:
     install_parser.set_defaults(func=cmd_install)
 
     setup_parser = subparsers.add_parser("setup", help="Configure a starter bundle")
-    setup_parser.add_argument("bundle", choices=sorted(load_registry_definition().get("bundles", {}).keys()))
+    setup_parser.add_argument(
+        "bundle",
+        nargs="?",
+        default="telegram-starter",
+        choices=sorted(load_registry_definition().get("bundles", {}).keys()),
+        help="Bundle to configure (default: telegram-starter)",
+    )
     setup_parser.add_argument("--skip-install-commands", action="store_true")
     setup_parser.add_argument("--skip-runtime-check", action="store_true", help="Skip [runtime].version constraint enforcement")
     setup_parser.add_argument("--trust", action="store_true", help="Approve running install commands and hooks for non-blessed bundle modules without prompting")

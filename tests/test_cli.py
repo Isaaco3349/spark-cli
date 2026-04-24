@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from spark_cli.cli import (
     build_module_repair_hints,
+    build_parser,
     build_status_repair_hints,
     build_module_envs,
     collect_secret_requirements,
@@ -497,13 +498,21 @@ class SparkCliTests(unittest.TestCase):
 
     def test_expand_targets_expands_bundle_name(self) -> None:
         modules = {
+            "spark-researcher": object(),
             "spark-telegram-bot": object(),
             "spark-intelligence-builder": object(),
+            "domain-chip-memory": object(),
             "spawner-ui": object(),
         }
         self.assertEqual(
             expand_targets("telegram-starter", modules, include_all=False),
-            ["spark-telegram-bot", "spark-intelligence-builder", "spawner-ui"],
+            [
+                "spark-researcher",
+                "spark-intelligence-builder",
+                "domain-chip-memory",
+                "spawner-ui",
+                "spark-telegram-bot",
+            ],
         )
 
     def test_summarize_command_output_skips_npm_prefix_lines(self) -> None:
@@ -550,8 +559,18 @@ class SparkCliTests(unittest.TestCase):
     def test_resolve_bundle_names_reads_registry_bundle(self) -> None:
         self.assertEqual(
             resolve_bundle_names("telegram-starter"),
-            ["spark-telegram-bot", "spark-intelligence-builder", "spawner-ui"],
+            [
+                "spark-researcher",
+                "spark-intelligence-builder",
+                "domain-chip-memory",
+                "spawner-ui",
+                "spark-telegram-bot",
+            ],
         )
+
+    def test_setup_defaults_to_telegram_starter_bundle(self) -> None:
+        args = build_parser().parse_args(["setup", "--non-interactive"])
+        self.assertEqual(args.bundle, "telegram-starter")
 
     def test_print_install_summary_mentions_ingress_owner(self) -> None:
         gateway = make_module("spark-telegram-bot", ["telegram.ingress"])
@@ -1149,8 +1168,8 @@ class SparkCliTests(unittest.TestCase):
             self.assertEqual(marker_path.read_text(encoding="utf-8"), "ok")
 
     def test_install_module_record_writes_provenance_metadata(self) -> None:
-        original = REGISTRY_PATH.read_text(encoding="utf-8") if REGISTRY_PATH.exists() else None
-        try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            registry_path = Path(tmp_dir) / "installed.json"
             module = Module(
                 name="spark-telegram-bot",
                 path=Path("C:/tmp/spark-telegram-bot"),
@@ -1164,23 +1183,24 @@ class SparkCliTests(unittest.TestCase):
                     }
                 },
             )
-            install_module_record(
-                module,
-                operation="install",
-                source_kind="bundle",
-                source_target="telegram-starter",
-                bundle_name="telegram-starter",
-                skip_install_commands=True,
-            )
-            install_module_record(
-                module,
-                operation="update",
-                source_kind="bundle",
-                source_target="telegram-starter",
-                bundle_name="telegram-starter",
-                skip_install_commands=False,
-            )
-            payload = load_json(REGISTRY_PATH, {})
+            with patch("spark_cli.cli.REGISTRY_PATH", registry_path):
+                install_module_record(
+                    module,
+                    operation="install",
+                    source_kind="bundle",
+                    source_target="telegram-starter",
+                    bundle_name="telegram-starter",
+                    skip_install_commands=True,
+                )
+                install_module_record(
+                    module,
+                    operation="update",
+                    source_kind="bundle",
+                    source_target="telegram-starter",
+                    bundle_name="telegram-starter",
+                    skip_install_commands=False,
+                )
+            payload = load_json(registry_path, {})
             record = payload["spark-telegram-bot"]
             self.assertEqual(record["installed_via"]["kind"], "bundle")
             self.assertEqual(record["installed_via"]["target"], "telegram-starter")
@@ -1192,12 +1212,6 @@ class SparkCliTests(unittest.TestCase):
             self.assertFalse(record["last_update"]["skip_install_commands"])
             self.assertEqual(record["installed_at"], record["last_install"]["at"])
             self.assertIn("updated_at", record)
-        finally:
-            if original is not None:
-                REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-                REGISTRY_PATH.write_text(original, encoding="utf-8")
-            elif REGISTRY_PATH.exists():
-                REGISTRY_PATH.unlink()
 
     def test_build_module_repair_hints_reports_missing_dependency_and_config_regen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

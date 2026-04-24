@@ -84,7 +84,7 @@ python -m pytest tests/ -q
 | `spark list` | List discoverable modules |
 | `spark init <name>` | Scaffold a new module (`--kind python\|node`, `--path`, `--description`) |
 | `spark install <target>` | Install by registry name, bundle, local path, or git URL |
-| `spark setup <bundle>` | Interactive preflight + secret prompts for a whole bundle |
+| `spark setup [bundle]` | Interactive preflight + secret prompts for a whole bundle; defaults to `telegram-starter` |
 | `spark update [target]` | Re-run install commands; `git pull --ff-only` for managed clones |
 | `spark uninstall [target]` | Tear down: stop process, drop env, delete clone, rotate secrets |
 | `spark start [target]` | Topological launch using `needs.modules` order; polls `ready_check` |
@@ -120,48 +120,34 @@ spark status
 
 The scaffolded `spark.toml` is schema-1 compliant and installs cleanly out of
 the box with a healthcheck that always returns ok. See any of the
-`spark-intelligence-builder`, `spark-telegram-bot`, or `spawner-ui` manifests
-for full-featured examples.
+`spark-researcher`, `spark-intelligence-builder`, `domain-chip-memory`,
+`spark-telegram-bot`, or `spawner-ui` manifests for full-featured examples.
 
 ---
 
-## The `registry.json` caveat
+## Default Starter Bundle
 
-`registry.json` in this repo currently points the starter bundle modules
-(`spark-telegram-bot`, `spark-intelligence-builder`, `spawner-ui`) at
-**local Windows paths** on the original author's machine. That's how the
-spike was developed; it **will not work on any other machine** as-is.
+`spark setup` defaults to the blessed `telegram-starter` bundle. That bundle
+brings the core Spark ecosystem down together:
 
-To use the bundled `telegram-starter` on a different computer, you have two
-clean options:
+- `spark-researcher` for research, advisory, packets, and chip authoring
+- `spark-intelligence-builder` for identity, routing, providers, and runtime memory
+- `domain-chip-memory` as the default memory substrate and benchmark chip
+- `spawner-ui` for the local execution plane and dashboard
+- `spark-telegram-bot` as the Telegram ingress owner
 
-**1. Replace the local paths with git URLs.** Edit `registry.json`:
+The registry points each starter module at its canonical GitHub repo. `spark
+install telegram-starter` or `spark setup` clones missing modules into
+`~/.spark/modules/<name>/source/`, validates each `spark.toml`, checks
+capability conflicts, and records the install under `~/.spark/state/`.
 
-```json
-{
-  "modules": {
-    "spark-telegram-bot": {
-      "source": "https://github.com/<owner>/spark-telegram-bot",
-      "blessed": true,
-      "summary": "Telegram ingress gateway for the Spark starter stack"
-    }
-  }
-}
-```
-
-`spark install` will `git clone --depth=1` into
-`~/.spark/modules/<name>/source/` and load the manifest from the clone.
-
-**2. Skip the bundled registry and install individual modules by path or
-git URL.** The bundle is just a convenience; the CLI works fine without it:
+You can still skip the bundled registry and install individual modules by path
+or git URL:
 
 ```bash
 spark install github.com/someone/spark-telegram-bot
 spark install ./my-local-module
 ```
-
-A future commit will flip the registry to git URLs once the three starter
-modules have canonical public repos.
 
 ---
 

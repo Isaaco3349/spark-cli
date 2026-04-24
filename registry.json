@@ -1,5 +1,10 @@
 {
   "modules": {
+    "spark-researcher": {
+      "source": "https://github.com/vibeforge1111/spark-researcher",
+      "blessed": true,
+      "summary": "Research, advisory, memory packet, and domain-chip authoring runtime for Spark"
+    },
     "spark-telegram-bot": {
       "source": "https://github.com/vibeforge1111/spark-telegram-bot",
       "blessed": true,
@@ -10,6 +15,11 @@
       "blessed": true,
       "summary": "Spark runtime core for identity, memory, and routing"
     },
+    "domain-chip-memory": {
+      "source": "https://github.com/vibeforge1111/domain-chip-memory",
+      "blessed": true,
+      "summary": "Default memory substrate, benchmark pack, and Telegram memory-check chip"
+    },
     "spawner-ui": {
       "source": "https://github.com/vibeforge1111/vibeship-spawner-ui",
       "blessed": true,
@@ -19,11 +29,13 @@
   "bundles": {
     "telegram-starter": {
       "modules": [
-        "spark-telegram-bot",
+        "spark-researcher",
         "spark-intelligence-builder",
-        "spawner-ui"
+        "domain-chip-memory",
+        "spawner-ui",
+        "spark-telegram-bot"
       ],
-      "summary": "Telegram gateway + Builder runtime + Spawner execution plane"
+      "summary": "Researcher + Builder runtime + default memory + Spawner execution plane + Telegram gateway"
     }
   }
 }
