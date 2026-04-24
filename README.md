@@ -59,6 +59,12 @@ Recommended macOS/Linux/WSL install:
 curl -fsSL https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scripts/install.sh | bash
 ```
 
+Recommended Windows PowerShell install:
+
+```powershell
+iwr https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scripts/install.ps1 -UseBasicParsing | iex
+```
+
 The installer keeps Spark self-contained under `~/.spark/`:
 
 - downloads a managed Node 22 runtime into `~/.spark/tools/`
@@ -75,6 +81,22 @@ curl -fsSL https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scri
   --setup-arg "$TELEGRAM_BOT_TOKEN" \
   --setup-arg --admin-telegram-ids \
   --setup-arg "$TELEGRAM_ADMIN_IDS"
+```
+
+To wire a cloud LLM during setup, pass the provider and key. For the Z.AI GLM
+coding endpoint:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scripts/install.sh | bash -s -- \
+  --setup-arg --non-interactive \
+  --setup-arg --bot-token \
+  --setup-arg "$TELEGRAM_BOT_TOKEN" \
+  --setup-arg --admin-telegram-ids \
+  --setup-arg "$TELEGRAM_ADMIN_IDS" \
+  --setup-arg --llm-provider \
+  --setup-arg zai \
+  --setup-arg --zai-api-key \
+  --setup-arg "$ZAI_API_KEY"
 ```
 
 Local development install:
@@ -166,6 +188,18 @@ The registry points each starter module at its canonical GitHub repo. `spark
 install telegram-starter` or `spark setup` clones missing modules into
 `~/.spark/modules/<name>/source/`, validates each `spark.toml`, checks
 capability conflicts, and records the install under `~/.spark/state/`.
+
+Setup also writes the shared gateway env that makes the pieces talk to each
+other: Telegram gets the bot/admin settings, Telegram and Spawner both get the
+mission relay URL, and Telegram/Spawner/Builder get the selected LLM provider
+settings. If no cloud provider is chosen, Spark defaults the gateway to local
+Ollama (`http://localhost:11434`) so a user can still bring their own local
+runtime. Cloud providers can be selected with:
+
+- `--llm-provider zai --zai-api-key ...` for GLM through the Z.AI coding endpoint
+- `--llm-provider openai --openai-api-key ...`
+- `--llm-provider anthropic --anthropic-api-key ...`
+- `--llm-provider ollama --ollama-url ... --ollama-model ...`
 
 You can still skip the bundled registry and install individual modules by path
 or git URL:

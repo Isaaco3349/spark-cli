@@ -179,6 +179,12 @@ class SparkCliTests(unittest.TestCase):
         self.assertEqual(coerce_config_value("[1,2,3]"), [1, 2, 3])
         self.assertEqual(coerce_config_value("sonnet"), "sonnet")
 
+    def test_load_json_accepts_utf8_bom_from_windows_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "registry.json"
+            path.write_text('\ufeff{"ok": true}', encoding="utf-8")
+            self.assertEqual(load_json(path, {}), {"ok": True})
+
     def test_describe_install_risk_lists_commands_and_hooks(self) -> None:
         module = Module(
             name="thirdparty",
@@ -674,6 +680,10 @@ class SparkCliTests(unittest.TestCase):
                     "telegram.bot_token=123456:test-token",
                     "--secret",
                     "telegram.admin_ids=111,222",
+                    "--llm-provider",
+                    "zai",
+                    "--zai-api-key",
+                    "zai-test-key",
                 ]
             )
 
@@ -700,13 +710,21 @@ class SparkCliTests(unittest.TestCase):
             self.assertEqual(setup_state["bundle"], "telegram-starter")
             self.assertEqual(setup_state["modules"], expected)
             self.assertEqual(setup_state["telegram_ingress_owner"], "spark-telegram-bot")
+            self.assertEqual(setup_state["llm"]["provider"], "zai")
+            self.assertEqual(setup_state["llm"]["model"], "glm-5.1")
+            self.assertTrue(setup_state["llm"]["api_key_configured"])
 
             gateway_env = (module_config_dir / "spark-telegram-bot.env").read_text(encoding="utf-8")
             spawner_env = (module_config_dir / "spawner-ui.env").read_text(encoding="utf-8")
             self.assertIn("BOT_TOKEN=123456:test-token", gateway_env)
             self.assertIn("ADMIN_TELEGRAM_IDS=111,222", gateway_env)
             self.assertIn("SPAWNER_UI_URL=http://127.0.0.1:5173", gateway_env)
+            self.assertIn("LLM_PROVIDER=zai", gateway_env)
+            self.assertIn("ZAI_API_KEY=zai-test-key", gateway_env)
+            self.assertIn("ZAI_BASE_URL=https://api.z.ai/api/coding/paas/v4/", gateway_env)
+            self.assertIn("ZAI_MODEL=glm-5.1", gateway_env)
             self.assertNotIn("BOT_TOKEN=", spawner_env)
+            self.assertIn("SPARK_LLM_PROVIDER=zai", spawner_env)
             self.assertIn("MISSION_CONTROL_WEBHOOK_URLS=http://127.0.0.1:8788/spawner-events", spawner_env)
 
     def test_print_install_summary_mentions_ingress_owner(self) -> None:
@@ -920,6 +938,43 @@ class SparkCliTests(unittest.TestCase):
         )
         self.assertEqual(envs["spark-telegram-bot"]["SPAWNER_UI_URL"], "http://127.0.0.1:5173")
         self.assertEqual(envs["spawner-ui"]["MISSION_CONTROL_WEBHOOK_URLS"], "http://127.0.0.1:8788/spawner-events")
+        self.assertEqual(envs["spark-telegram-bot"]["LLM_PROVIDER"], "ollama")
+        self.assertEqual(envs["spark-telegram-bot"]["OLLAMA_URL"], "http://localhost:11434")
+        self.assertEqual(envs["spark-intelligence-builder"]["SPARK_LLM_PROVIDER"], "ollama")
+
+    def test_build_module_envs_wires_zai_gateway_configuration(self) -> None:
+        gateway = make_module("spark-telegram-bot", ["telegram.ingress"])
+        builder = make_module("spark-intelligence-builder", ["spark.runtime"])
+        spawner = make_module("spawner-ui", ["mission.execution"])
+
+        class Args:
+            spawner_ui_url = "http://127.0.0.1:5173"
+            telegram_gateway_mode = "polling"
+            telegram_webhook_url = None
+            llm_provider = "zai"
+            zai_base_url = "https://api.z.ai/api/coding/paas/v4/"
+            zai_model = "glm-5.1"
+
+        envs = build_module_envs(
+            Args(),
+            {
+                gateway.name: gateway,
+                builder.name: builder,
+                spawner.name: spawner,
+            },
+            {
+                "telegram.bot_token": "abc",
+                "telegram.admin_ids": "123",
+                "llm.zai.api_key": "zai-key",
+            },
+        )
+
+        gateway_env = envs["spark-telegram-bot"]
+        self.assertEqual(gateway_env["LLM_PROVIDER"], "zai")
+        self.assertEqual(gateway_env["BOT_DEFAULT_PROVIDER"], "zai")
+        self.assertEqual(gateway_env["ZAI_API_KEY"], "zai-key")
+        self.assertEqual(gateway_env["ZAI_MODEL"], "glm-5.1")
+        self.assertEqual(envs["spawner-ui"]["SPARK_ZAI_MODEL"], "glm-5.1")
 
     def test_pid_is_running_detects_current_process(self) -> None:
         self.assertTrue(pid_is_running(os.getpid()))
@@ -1462,6 +1517,18 @@ class SparkCliTests(unittest.TestCase):
             hints,
         )
         self.assertIn("spark-telegram-bot is missing dependencies: spark-intelligence-builder.", hints)
+        self.assertIn(
+            "No LLM provider is configured. Run `spark setup --llm-provider zai --zai-api-key <key>` or choose another provider.",
+            hints,
+        )
+
+    def test_build_status_repair_hints_reports_cloud_llm_without_key(self) -> None:
+        hints = build_status_repair_hints(
+            {},
+            [],
+            {"llm": {"provider": "zai", "api_key_configured": False}},
+        )
+        self.assertIn("LLM provider `zai` is missing an API key. Re-run `spark setup --llm-provider zai --zai-api-key <key>`.", hints)
 
     def test_update_setup_state_after_uninstall_clears_empty_setup(self) -> None:
         original = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None
@@ -1491,6 +1558,17 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn('export SPARK_HOME="$SPARK_PREFIX"', script)
         self.assertIn('"$SPARK_PREFIX/bin/spark" setup "$SPARK_BUNDLE"', script)
         self.assertIn("spark_cli.cli", script)
+
+    def test_windows_install_script_bootstraps_local_prefix_contract(self) -> None:
+        script = (Path(__file__).resolve().parents[1] / "scripts" / "install.ps1").read_text(encoding="utf-8")
+        self.assertIn('[string]$Prefix = "$HOME\\.spark"', script)
+        self.assertIn('[string]$NodeVersion = "22.18.0"', script)
+        self.assertIn("node-v$NodeVersion-win-x64.zip", script)
+        self.assertIn("python -m venv", script)
+        self.assertIn("pip install -e", script)
+        self.assertIn("$env:PATH = \"$nodeDir;$env:PATH\"", script)
+        self.assertIn('set "SPARK_HOME=$Script:SparkPrefix"', script)
+        self.assertIn("& $sparkCmd setup $Bundle @SetupArg", script)
 
     def test_cli_honors_spark_home_environment_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

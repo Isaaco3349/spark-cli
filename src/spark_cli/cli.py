@@ -376,7 +376,7 @@ def keychain_env_for_module(module: Module) -> dict[str, str]:
 def load_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def save_json(path: Path, payload: Any) -> None:
@@ -438,6 +438,9 @@ def collect_secret_values(
         "telegram.bot_token": getattr(args, "bot_token", None),
         "telegram.admin_ids": getattr(args, "admin_telegram_ids", None),
         "telegram.webhook_secret": getattr(args, "telegram_webhook_secret", None),
+        "llm.zai.api_key": getattr(args, "zai_api_key", None),
+        "llm.openai.api_key": getattr(args, "openai_api_key", None),
+        "llm.anthropic.api_key": getattr(args, "anthropic_api_key", None),
     }
     for key, value in legacy_map.items():
         if value:
@@ -726,10 +729,103 @@ def write_generated_env(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+LLM_PROVIDER_ENV: dict[str, dict[str, str]] = {
+    "zai": {
+        "api_key_secret": "llm.zai.api_key",
+        "api_key_env": "ZAI_API_KEY",
+        "base_url_arg": "zai_base_url",
+        "base_url_env": "ZAI_BASE_URL",
+        "base_url_default": "https://api.z.ai/api/coding/paas/v4/",
+        "model_arg": "zai_model",
+        "model_env": "ZAI_MODEL",
+        "model_default": "glm-5.1",
+        "bot_provider": "zai",
+    },
+    "openai": {
+        "api_key_secret": "llm.openai.api_key",
+        "api_key_env": "OPENAI_API_KEY",
+        "base_url_arg": "openai_base_url",
+        "base_url_env": "OPENAI_BASE_URL",
+        "base_url_default": "https://api.openai.com/v1",
+        "model_arg": "openai_model",
+        "model_env": "OPENAI_MODEL",
+        "model_default": "gpt-5.5",
+        "bot_provider": "codex",
+    },
+    "anthropic": {
+        "api_key_secret": "llm.anthropic.api_key",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "base_url_arg": "anthropic_base_url",
+        "base_url_env": "ANTHROPIC_BASE_URL",
+        "base_url_default": "https://api.anthropic.com",
+        "model_arg": "anthropic_model",
+        "model_env": "ANTHROPIC_MODEL",
+        "model_default": "claude-sonnet-4.5",
+        "bot_provider": "claude",
+    },
+    "ollama": {
+        "base_url_arg": "ollama_url",
+        "base_url_env": "OLLAMA_URL",
+        "base_url_default": "http://localhost:11434",
+        "model_arg": "ollama_model",
+        "model_env": "OLLAMA_MODEL",
+        "model_default": "kimi-k2.5:cloud",
+        "bot_provider": "codex",
+    },
+}
+
+
+def resolve_llm_provider(args: argparse.Namespace, secret_values: dict[str, str]) -> str:
+    requested = getattr(args, "llm_provider", None)
+    if requested:
+        return str(requested)
+    for provider, spec in LLM_PROVIDER_ENV.items():
+        secret_id = spec.get("api_key_secret")
+        if secret_id and secret_values.get(secret_id):
+            return provider
+    return "ollama"
+
+
+def build_llm_env(args: argparse.Namespace, secret_values: dict[str, str]) -> tuple[str, dict[str, str]]:
+    provider = resolve_llm_provider(args, secret_values)
+    spec = LLM_PROVIDER_ENV[provider]
+    env: dict[str, str] = {
+        "LLM_PROVIDER": provider,
+        "SPARK_LLM_PROVIDER": provider,
+        "BOT_DEFAULT_PROVIDER": spec["bot_provider"],
+    }
+
+    api_key_secret = spec.get("api_key_secret")
+    api_key_env = spec.get("api_key_env")
+    if api_key_secret and api_key_env and secret_values.get(api_key_secret):
+        env[api_key_env] = secret_values[api_key_secret]
+
+    base_url = getattr(args, spec["base_url_arg"], None) or spec["base_url_default"]
+    model = getattr(args, spec["model_arg"], None) or spec["model_default"]
+    env[spec["base_url_env"]] = str(base_url)
+    env[spec["model_env"]] = str(model)
+    return provider, env
+
+
+def llm_setup_state(provider: str, env: dict[str, str]) -> dict[str, Any]:
+    spec = LLM_PROVIDER_ENV[provider]
+    api_key_env = spec.get("api_key_env")
+    return {
+        "provider": provider,
+        "bot_default_provider": spec["bot_provider"],
+        "base_url_env": spec["base_url_env"],
+        "model_env": spec["model_env"],
+        "model": env.get(spec["model_env"], ""),
+        "api_key_env": api_key_env,
+        "api_key_configured": bool(api_key_env and env.get(api_key_env)),
+    }
+
+
 def build_module_envs(args: argparse.Namespace, modules_by_name: dict[str, Module], secret_values: dict[str, str]) -> dict[str, dict[str, str]]:
     gateway = modules_by_name["spark-telegram-bot"]
     spawner = modules_by_name["spawner-ui"]
     builder = modules_by_name["spark-intelligence-builder"]
+    _, llm_env = build_llm_env(args, secret_values)
 
     gateway_env = {
         "BOT_TOKEN": secret_values.get("telegram.bot_token", ""),
@@ -739,6 +835,7 @@ def build_module_envs(args: argparse.Namespace, modules_by_name: dict[str, Modul
         "SPAWNER_UI_URL": args.spawner_ui_url or "http://127.0.0.1:5173",
         "TELEGRAM_GATEWAY_MODE": args.telegram_gateway_mode,
     }
+    gateway_env.update(llm_env)
     if secret_values.get("telegram.webhook_secret"):
         gateway_env["TELEGRAM_WEBHOOK_SECRET"] = secret_values["telegram.webhook_secret"]
     if args.telegram_webhook_url:
@@ -750,13 +847,14 @@ def build_module_envs(args: argparse.Namespace, modules_by_name: dict[str, Modul
     spawner_env = {
         "MISSION_CONTROL_WEBHOOK_URLS": f"{relay_base}/spawner-events",
     }
+    spawner_env.update({f"SPARK_{key}": value for key, value in llm_env.items()})
     if secret_values.get("telegram.webhook_secret"):
         spawner_env["TELEGRAM_RELAY_SECRET"] = secret_values["telegram.webhook_secret"]
 
     return {
         gateway.name: gateway_env,
         spawner.name: spawner_env,
-        builder.name: {},
+        builder.name: {f"SPARK_{key}": value for key, value in llm_env.items()},
     }
 
 
@@ -1384,6 +1482,19 @@ def build_status_repair_hints(
         hints.append(
             f"Configured Telegram ingress owner `{ingress_owner}` is not installed. Run `spark setup {bundle_name or 'telegram-starter'}`."
         )
+    llm_state = setup_state.get("llm")
+    if not isinstance(llm_state, dict) or not llm_state.get("provider"):
+        hints.append(
+            "No LLM provider is configured. Run `spark setup --llm-provider zai --zai-api-key <key>` or choose another provider."
+        )
+    elif llm_state.get("provider") in {"zai", "openai", "anthropic"} and not llm_state.get("api_key_configured"):
+        provider = llm_state["provider"]
+        flag = {
+            "zai": "--zai-api-key",
+            "openai": "--openai-api-key",
+            "anthropic": "--anthropic-api-key",
+        }[str(provider)]
+        hints.append(f"LLM provider `{provider}` is missing an API key. Re-run `spark setup --llm-provider {provider} {flag} <key>`.")
     module_results_by_name = {item["name"]: item for item in module_results}
     for module in modules.values():
         missing_dependencies, unhealthy_dependencies = dependency_issues_for_module(module, module_results_by_name)
@@ -1504,6 +1615,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if interactive:
         print_setup_preflight(bundle)
     secret_values = collect_secret_values(args, bundle, interactive=interactive)
+    llm_provider, llm_env = build_llm_env(args, secret_values)
 
     setup_state = {
         "bundle": args.bundle,
@@ -1511,6 +1623,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "telegram_ingress_owner": ingress_owner.name,
         "configured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "secret_keys": sorted(secret_values.keys()),
+        "llm": llm_setup_state(llm_provider, llm_env),
     }
     save_json(CONFIG_PATH, setup_state)
     resume = getattr(args, "resume", False)
@@ -1623,6 +1736,7 @@ def collect_status_payload() -> dict[str, Any]:
         "ok": ok,
         "summary": "Spark CLI spike status",
         "telegram_ingress_owner": setup_state.get("telegram_ingress_owner"),
+        "llm": setup_state.get("llm"),
         "modules": module_results,
         "tracked_pids": load_pids(),
         "config_dir": str(CONFIG_DIR),
@@ -1645,6 +1759,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     ingress_owner = payload.get("telegram_ingress_owner")
     if ingress_owner:
         print(f"Telegram ingress owner: {ingress_owner}")
+    llm_state = payload.get("llm")
+    if isinstance(llm_state, dict) and llm_state.get("provider"):
+        model = llm_state.get("model") or "default"
+        print(f"LLM provider: {llm_state['provider']} ({model})")
     for hint in payload.get("repair_hints", []):
         print(f"Repair: {hint}")
     print("")
@@ -2405,6 +2523,18 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--telegram-webhook-url")
     setup_parser.add_argument("--telegram-webhook-secret")
     setup_parser.add_argument("--spawner-ui-url", default="http://127.0.0.1:5173")
+    setup_parser.add_argument("--llm-provider", choices=sorted(LLM_PROVIDER_ENV), help="Default LLM gateway provider (default: ollama unless an API key flag selects a cloud provider)")
+    setup_parser.add_argument("--zai-api-key", help="Z.AI / GLM coding endpoint API key")
+    setup_parser.add_argument("--zai-base-url", default="https://api.z.ai/api/coding/paas/v4/")
+    setup_parser.add_argument("--zai-model", default="glm-5.1")
+    setup_parser.add_argument("--openai-api-key")
+    setup_parser.add_argument("--openai-base-url", default="https://api.openai.com/v1")
+    setup_parser.add_argument("--openai-model", default="gpt-5.5")
+    setup_parser.add_argument("--anthropic-api-key")
+    setup_parser.add_argument("--anthropic-base-url", default="https://api.anthropic.com")
+    setup_parser.add_argument("--anthropic-model", default="claude-sonnet-4.5")
+    setup_parser.add_argument("--ollama-url", default="http://localhost:11434")
+    setup_parser.add_argument("--ollama-model", default="kimi-k2.5:cloud")
     setup_parser.set_defaults(func=cmd_setup)
 
     status_parser = subparsers.add_parser("status", help="Run module healthchecks")
