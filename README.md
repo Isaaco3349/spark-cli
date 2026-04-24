@@ -70,7 +70,7 @@ The installer keeps Spark self-contained under `~/.spark/`:
 - downloads a managed Node 22 runtime into `~/.spark/tools/`
 - installs `spark-cli` into an isolated Python virtualenv
 - writes a `~/.spark/bin/spark` wrapper
-- runs `spark setup telegram-starter` unless `--skip-setup` is passed
+- runs `spark setup` (default bundle: `telegram-starter`) unless `--skip-setup` is passed
 
 For scripted setup:
 
@@ -181,7 +181,7 @@ brings the core Spark ecosystem down together:
 - `spark-researcher` for research, advisory, packets, and chip authoring
 - `spark-intelligence-builder` for identity, routing, providers, and runtime memory
 - `domain-chip-memory` as the default memory substrate and benchmark chip
-- `spawner-ui` for the local execution plane and dashboard
+- `spawner-ui` for the local execution plane and mission board
 - `spark-telegram-bot` as the Telegram ingress owner
 
 The registry points each starter module at its canonical GitHub repo. `spark
@@ -203,6 +203,10 @@ Cloud providers can be selected with:
 - `--llm-provider openai --openai-api-key ...`
 - `--llm-provider anthropic --anthropic-api-key ...`
 - `--llm-provider ollama --ollama-url ... --ollama-model ...`
+
+The older dashboard/resonance API is intentionally not part of the launch
+starter path. Fresh installs should not require `SPARK_API_URL`,
+`SPARK_DASHBOARD_URL`, or a local service on port 8787.
 
 You can still skip the bundled registry and install individual modules by path
 or git URL:

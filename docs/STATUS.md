@@ -1,9 +1,9 @@
 # Spark CLI — Status Audit
 
-**Last updated:** 2026-04-24 (installer bootstrap pass)
+**Last updated:** 2026-04-24 (launch installer/onboarding pass)
 **Scope:** the `spark-cli` spike at `C:\Users\USER\Desktop\spark-cli`
 **Source of truth:** `src/spark_cli/cli.py` (~2420 LOC) + `tests/test_cli.py` (~1270 LOC)
-**Test state:** 93/93 passing on this machine after the bootstrap installer addition
+**Test state:** 98/98 passing on this machine after the launch installer pass
 **Branch:** `master`
 
 ---
@@ -31,9 +31,16 @@ Verified in WSL sandbox:
 - generated per-module config files for all five modules
 - selected `spark-telegram-bot` as the only Telegram ingress owner
 
+Verified again during the launch pass:
+
+- `python -m pytest tests/test_cli.py -q` -> 98 passed
+- Windows temp `SPARK_HOME` setup cloned/registers all five starter modules
+- WSL Ubuntu temp `SPARK_HOME` setup cloned/registers all five starter modules
+- default LLM provider wiring supports Z.AI GLM (`glm-5.1`) without writing raw keys to generated module env files
+- dashboard/resonance API is deferred; starter installs should not require `SPARK_API_URL`, `SPARK_DASHBOARD_URL`, or a local service on port 8787
+
 Still needs a follow-up hardening pass:
 
-- `scripts/install.ps1` for native Windows
 - full dependency-install smoke with install command logs per module
 - bundle lock file with repo refs/SHAs
 - installer checksum verification for downloaded Node tarballs
