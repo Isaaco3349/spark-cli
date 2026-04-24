@@ -1609,6 +1609,29 @@ def run_install_commands_with_progress(
     record_install_step(progress_key, "install_commands")
 
 
+def print_setup_next_steps(bundle_name: str, ingress_owner: Module, llm_state: dict[str, Any]) -> None:
+    provider = llm_state.get("provider") or "unknown"
+    model = llm_state.get("model") or "not configured"
+    print("")
+    print("Next steps:")
+    print("  1. Verify the install:")
+    print("     spark status")
+    print("  2. Start the local execution plane:")
+    print("     spark start spawner-ui")
+    print("  3. Start Telegram long polling:")
+    print(f"     spark start {ingress_owner.name}")
+    print("  4. Open your Telegram bot and send:")
+    print("     /start")
+    print("     /myid")
+    print("     /diagnose")
+    print("  5. Send a normal message and confirm the LLM responds.")
+    print("")
+    print(f"LLM provider: {provider} ({model})")
+    print("Need a bot token? Open @BotFather in Telegram, run /newbot, then rerun:")
+    print(f"     spark setup {bundle_name}")
+    print("Need to change LLMs? Rerun setup with --llm-provider openai|anthropic|zai|ollama.")
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     ensure_state_dirs()
     modules = discover_modules()
@@ -1676,6 +1699,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if keychain_report:
         for secret_id, backend in sorted(keychain_report.items()):
             print(f"Secret {secret_id} -> {backend}")
+    print_setup_next_steps(args.bundle, ingress_owner, setup_state["llm"])
     return 0
 
 

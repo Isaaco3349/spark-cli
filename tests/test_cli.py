@@ -726,8 +726,16 @@ class SparkCliTests(unittest.TestCase):
 
             with patch.multiple("spark_cli.cli", **patches), \
                  patch("spark_cli.cli.load_registry_definition", return_value=registry), \
-                 patch("spark_cli.cli.keychain_available", return_value=False):
+                 patch("spark_cli.cli.keychain_available", return_value=False), \
+                 patch("sys.stdout", new_callable=StringIO) as stdout:
                 self.assertEqual(cmd_setup(args), 0)
+            setup_output = stdout.getvalue()
+            self.assertIn("Next steps:", setup_output)
+            self.assertIn("spark status", setup_output)
+            self.assertIn("spark start spawner-ui", setup_output)
+            self.assertIn("spark start spark-telegram-bot", setup_output)
+            self.assertIn("/diagnose", setup_output)
+            self.assertIn("Need a bot token? Open @BotFather", setup_output)
 
             expected = [
                 "spark-researcher",
