@@ -1,7 +1,7 @@
 # Spark CLI — Status Audit
 
 **Last updated:** 2026-04-24 (launch installer/onboarding pass)
-**Scope:** the `spark-cli` spike at `C:\Users\USER\Desktop\spark-cli`
+**Scope:** the `spark-cli` spike at `<workspace>\\spark-cli`
 **Source of truth:** `src/spark_cli/cli.py` (~2420 LOC) + `tests/test_cli.py` (~1270 LOC)
 **Test state:** 98/98 passing on this machine after the launch installer pass
 **Branch:** `master`

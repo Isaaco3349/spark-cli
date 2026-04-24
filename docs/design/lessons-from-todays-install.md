@@ -49,7 +49,7 @@ at all. Reduce questions by inferring what's already true.
 
 ## 4. Stale paths in committed config files
 
-**What happened.** Several `CLAUDE.md` files reference `C:/Users/USER/Desktop/`
+**What happened.** Several `CLAUDE.md` files reference `<workspace>/`
 paths from their original Windows authors. On a Mac these references silently
 make doc commands fail or send users to non-existent directories.
 

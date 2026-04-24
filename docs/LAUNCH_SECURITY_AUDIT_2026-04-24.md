@@ -97,7 +97,7 @@ Findings:
 - P0 fixed: non-admin users could still chat through Builder/LLM fallback and consume local agent/LLM resources. The bot is now private by default.
 - P1 fixed: webhook ingress is removed from the launch path. `TELEGRAM_GATEWAY_MODE=webhook` and `TELEGRAM_WEBHOOK_*` env fail closed; v1 uses long polling only.
 - P1 fixed: the local Spawner-to-Telegram relay now requires `TELEGRAM_RELAY_SECRET` so loopback POSTs are not anonymously accepted.
-- P1 fixed: project-build natural language flow is admin-only and project target paths are confined to `SPARK_PROJECT_ROOT` (default `C:\Users\USER\Desktop`) before being inserted into PRD content.
+- P1 fixed: project-build natural language flow is admin-only and project target paths are confined to `SPARK_PROJECT_ROOT` (default `<user-home>\\Desktop`) before being inserted into PRD content.
 - P2 partially fixed: launch-mode tests now cover polling default, webhook refusal, webhook env refusal, and relay secret validation. Add handler-level tests for access-gate behavior and `/myid` onboarding next.
 - P2 open: the future webhook design docs remain in the repo as research artifacts. They are not launch instructions and should stay behind the hosted-gateway migration checklist.
 
