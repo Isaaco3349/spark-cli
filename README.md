@@ -56,14 +56,22 @@ override.
 Recommended macOS/Linux/WSL install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scripts/install.sh | bash
+curl -fsSLO https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scripts/install.sh
+less install.sh
+bash ./install.sh
 ```
 
 Recommended Windows PowerShell install:
 
 ```powershell
-iwr https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scripts/install.ps1 -UseBasicParsing | iex
+iwr https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scripts/install.ps1 -OutFile .\install.ps1
+Get-Content .\install.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
+
+The launch docs intentionally avoid piping remote scripts directly into a
+shell. The installer also verifies the managed Node archive against Node's
+published `SHASUMS256.txt` before extraction.
 
 The installer keeps Spark self-contained under `~/.spark/`:
 
@@ -75,7 +83,7 @@ The installer keeps Spark self-contained under `~/.spark/`:
 For scripted setup:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scripts/install.sh | bash -s -- \
+bash ./install.sh \
   --setup-arg --non-interactive \
   --setup-arg --bot-token \
   --setup-arg "$TELEGRAM_BOT_TOKEN" \
@@ -87,7 +95,7 @@ To wire a cloud LLM during setup, pass the provider and key. For the Z.AI GLM
 coding endpoint:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/vibeforge1111/spark-cli/master/scripts/install.sh | bash -s -- \
+bash ./install.sh \
   --setup-arg --non-interactive \
   --setup-arg --bot-token \
   --setup-arg "$TELEGRAM_BOT_TOKEN" \

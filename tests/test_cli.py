@@ -1561,6 +1561,8 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn('SPARK_PREFIX="${SPARK_PREFIX:-$HOME/.spark}"', script)
         self.assertIn('SPARK_NODE_VERSION="${SPARK_NODE_VERSION:-22.18.0}"', script)
         self.assertIn("node-v$SPARK_NODE_VERSION-linux-x64.tar.xz", script)
+        self.assertIn("SHASUMS256.txt", script)
+        self.assertIn("verify_node_archive", script)
         self.assertIn("python3 -m venv", script)
         self.assertIn("pip install -e", script)
         self.assertIn("SPARK_LOCAL_REGISTRY", script)
@@ -1573,11 +1575,20 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn('[string]$Prefix = "$HOME\\.spark"', script)
         self.assertIn('[string]$NodeVersion = "22.18.0"', script)
         self.assertIn("node-v$NodeVersion-win-x64.zip", script)
+        self.assertIn("SHASUMS256.txt", script)
+        self.assertIn("Test-NodeArchiveHash", script)
         self.assertIn("python -m venv", script)
         self.assertIn("pip install -e", script)
         self.assertIn("$env:PATH = \"$nodeDir;$env:PATH\"", script)
         self.assertIn('set "SPARK_HOME=$Script:SparkPrefix"', script)
         self.assertIn("& $sparkCmd setup $Bundle @SetupArg", script)
+
+    def test_readme_does_not_recommend_piping_remote_installers_to_shell(self) -> None:
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+        compact_readme = " ".join(readme.split())
+        self.assertNotIn("| bash", readme)
+        self.assertNotIn("| iex", readme.lower())
+        self.assertIn("avoid piping remote scripts directly into a shell", compact_readme)
 
     def test_cli_honors_spark_home_environment_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

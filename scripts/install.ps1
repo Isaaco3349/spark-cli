@@ -43,11 +43,29 @@ function Install-Node {
 
     New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
     $archive = Join-Path $toolsDir "node-v$NodeVersion-win-x64.zip"
+    $shasums = Join-Path $toolsDir "node-v$NodeVersion-SHASUMS256.txt"
     $url = "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-x64.zip"
+    $shasumsUrl = "https://nodejs.org/dist/v$NodeVersion/SHASUMS256.txt"
     Write-SparkLog "Downloading Node $NodeVersion"
     Invoke-WebRequest -Uri $url -OutFile $archive
+    Invoke-WebRequest -Uri $shasumsUrl -OutFile $shasums
+    Test-NodeArchiveHash -Archive $archive -Shasums $shasums
     Expand-Archive -Path $archive -DestinationPath $toolsDir -Force
     return $nodeDir
+}
+
+function Test-NodeArchiveHash {
+    param([string]$Archive, [string]$Shasums)
+    $archiveName = Split-Path $Archive -Leaf
+    $line = Get-Content -LiteralPath $Shasums | Where-Object { $_ -match "^\S+\s+$([regex]::Escape($archiveName))$" } | Select-Object -First 1
+    if (-not $line) {
+        throw "Could not find $archiveName in Node SHASUMS256.txt"
+    }
+    $expected = ($line -split "\s+")[0].ToLowerInvariant()
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "Node archive checksum mismatch for $archiveName"
+    }
 }
 
 function Copy-DirectoryContents {

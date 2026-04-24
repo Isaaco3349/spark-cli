@@ -91,10 +91,41 @@ install_node() {
   need_cmd tar
   mkdir -p "$tools_dir"
   local archive="$tools_dir/node-v$SPARK_NODE_VERSION-linux-x64.tar.xz"
+  local shasums="$tools_dir/node-v$SPARK_NODE_VERSION-SHASUMS256.txt"
   local url="https://nodejs.org/dist/v$SPARK_NODE_VERSION/node-v$SPARK_NODE_VERSION-linux-x64.tar.xz"
+  local shasums_url="https://nodejs.org/dist/v$SPARK_NODE_VERSION/SHASUMS256.txt"
   log "Downloading Node $SPARK_NODE_VERSION"
   curl -fsSL "$url" -o "$archive"
+  curl -fsSL "$shasums_url" -o "$shasums"
+  verify_node_archive "$archive" "$shasums"
   tar -C "$tools_dir" -xf "$archive"
+}
+
+verify_node_archive() {
+  local archive="$1"
+  local shasums="$2"
+  local archive_name
+  archive_name="$(basename "$archive")"
+  local expected
+  expected="$(awk -v name="$archive_name" '$2 == name { print $1 }' "$shasums")"
+  if [ -z "$expected" ]; then
+    echo "Could not find $archive_name in Node SHASUMS256.txt" >&2
+    exit 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s  %s\n' "$expected" "$archive" | sha256sum -c -
+  elif command -v shasum >/dev/null 2>&1; then
+    local actual
+    actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
+    if [ "$actual" != "$expected" ]; then
+      echo "Node archive checksum mismatch for $archive_name" >&2
+      exit 1
+    fi
+  else
+    echo "Missing sha256sum or shasum for Node archive verification" >&2
+    exit 1
+  fi
 }
 
 checkout_cli() {
