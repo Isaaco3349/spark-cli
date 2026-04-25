@@ -114,6 +114,17 @@ class Module:
         return str(ready)
 
     @property
+    def post_ready_watch_seconds(self) -> int | None:
+        run = self.manifest.get("run", {}).get("default", {})
+        configured = run.get("post_ready_watch_seconds")
+        if configured is None:
+            return None
+        try:
+            return max(0, int(configured))
+        except (TypeError, ValueError):
+            return None
+
+    @property
     def install_commands(self) -> list[str]:
         commands = self.manifest.get("install", {}).get("dev", {}).get("commands", [])
         return [str(command) for command in commands]
@@ -3045,6 +3056,13 @@ def ready_timeout_seconds(module: Module) -> int:
         return 10
 
 
+def post_ready_watch_seconds(module: Module) -> int:
+    configured = module.post_ready_watch_seconds
+    if configured is not None:
+        return configured
+    return min(8, ready_timeout_seconds(module))
+
+
 def wait_for_ready_check(module: Module, process: subprocess.Popen[Any] | None = None) -> tuple[bool, str]:
     ready_check = module.ready_check
     if not ready_check:
@@ -3088,7 +3106,7 @@ def wait_for_ready_check(module: Module, process: subprocess.Popen[Any] | None =
             if result.returncode == 0:
                 detail = summarize_command_output(result)
                 if process is not None:
-                    stable_until = time.time() + min(8, timeout_seconds)
+                    stable_until = time.time() + post_ready_watch_seconds(module)
                     while time.time() < stable_until:
                         exit_code = process.poll()
                         if exit_code is not None:

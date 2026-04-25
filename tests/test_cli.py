@@ -97,6 +97,7 @@ from spark_cli.cli import (
     print_install_summary,
     process_runtime_detail,
     format_start_warning,
+    post_ready_watch_seconds,
     ready_timeout_seconds,
     read_generated_env,
     required_runtimes_for_modules,
@@ -1482,6 +1483,29 @@ class SparkCliTests(unittest.TestCase):
             },
         )
         self.assertEqual(ready_timeout_seconds(module), 17)
+
+    def test_post_ready_watch_seconds_reads_run_override(self) -> None:
+        module = Module(
+            name="telegram-target",
+            path=Path("C:/tmp/telegram-target"),
+            manifest={
+                "module": {"name": "telegram-target", "version": "0.1.0", "kind": "service", "plane": "ingress"},
+                "run": {"default": {"post_ready_watch_seconds": 20}},
+                "healthcheck": {"timeout_seconds": 60},
+            },
+        )
+        self.assertEqual(post_ready_watch_seconds(module), 20)
+
+    def test_post_ready_watch_seconds_defaults_to_bounded_health_timeout(self) -> None:
+        module = Module(
+            name="quick-target",
+            path=Path("C:/tmp/quick-target"),
+            manifest={
+                "module": {"name": "quick-target", "version": "0.1.0", "kind": "service", "plane": "execution"},
+                "healthcheck": {"timeout_seconds": 30},
+            },
+        )
+        self.assertEqual(post_ready_watch_seconds(module), 8)
 
     def test_wait_for_ready_check_runs_shell_ready_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
