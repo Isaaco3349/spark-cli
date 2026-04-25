@@ -884,7 +884,8 @@ def run_setup_wizard(
     if not to_prompt:
         return collected
     print("")
-    print("Spark setup wizard -- first, enter the required Telegram setup values (input is hidden).")
+    print("Spark setup wizard -- first, enter the required Telegram setup values.")
+    print("  Secrets are hidden; Telegram admin IDs are shown so comma-separated IDs are easy to verify.")
     for secret_id in to_prompt:
         value = prompt_for_secret(secret_id, requirements[secret_id])
         if value:

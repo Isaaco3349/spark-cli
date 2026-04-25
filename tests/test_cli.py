@@ -2218,13 +2218,17 @@ class SparkCliTests(unittest.TestCase):
                 return "123,456"
             return "SHOULD-NOT-HAPPEN"
 
+        output = StringIO()
         with patch("builtins.input", side_effect=fake_input), \
-             patch("spark_cli.cli.getpass.getpass") as getpass_mock:
+             patch("spark_cli.cli.getpass.getpass") as getpass_mock, \
+             patch("sys.stdout", output):
             collected = run_setup_wizard(existing, requirements)
         self.assertEqual(collected["telegram.bot_token"], "already-set")
         self.assertEqual(collected["telegram.admin_ids"], "123,456")
         self.assertNotIn("telegram.relay_secret", collected)
         self.assertEqual(len(prompted), 1)
+        self.assertIn("Secrets are hidden", output.getvalue())
+        self.assertIn("Telegram admin IDs are shown", output.getvalue())
         getpass_mock.assert_not_called()
 
     def test_run_setup_wizard_reprompts_when_required_secret_empty(self) -> None:
