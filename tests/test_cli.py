@@ -580,6 +580,37 @@ class SparkCliTests(unittest.TestCase):
         )
         self.assertEqual(summarize_command_output(result), "module emitted undecodable output")
 
+    def test_summarize_command_output_compacts_memory_json(self) -> None:
+        result = subprocess.CompletedProcess(
+            args=["dummy"],
+            returncode=0,
+            stdout=json.dumps({"backend": "local", "document_count": 2, "manifest_present": True}, indent=2),
+            stderr="",
+        )
+        self.assertEqual(
+            summarize_command_output(result),
+            "memory backend=local | documents=2 | manifest_present=True",
+        )
+
+    def test_summarize_command_output_compacts_contract_json(self) -> None:
+        result = subprocess.CompletedProcess(
+            args=["dummy"],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "normalized_contracts": ["A", "B"],
+                    "official_benchmark_adapters": [{"benchmark_name": "One"}],
+                    "shadow_benchmark_adapters": [{"benchmark_name": "Two"}],
+                },
+                indent=2,
+            ),
+            stderr="",
+        )
+        self.assertEqual(
+            summarize_command_output(result),
+            "2 normalized contracts | 1 official adapters | 1 shadow adapters",
+        )
+
     def test_write_runtime_shim_reuses_matching_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             shim_path = Path(tmp_dir) / "python.cmd"

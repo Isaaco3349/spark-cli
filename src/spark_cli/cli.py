@@ -2017,6 +2017,31 @@ def summarize_command_output(result: subprocess.CompletedProcess[str]) -> str:
         lines.append(line)
     if not lines:
         return "no output"
+    try:
+        payload = json.loads("\n".join(lines))
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        for key in ("detail", "message", "summary", "status"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        if "backend" in payload and "document_count" in payload:
+            return (
+                f"memory backend={payload.get('backend')} | "
+                f"documents={payload.get('document_count')} | "
+                f"manifest_present={payload.get('manifest_present')}"
+            )
+        if "normalized_contracts" in payload:
+            contracts = payload.get("normalized_contracts")
+            official = payload.get("official_benchmark_adapters")
+            shadow = payload.get("shadow_benchmark_adapters")
+            return (
+                f"{len(contracts) if isinstance(contracts, list) else 0} normalized contracts | "
+                f"{len(official) if isinstance(official, list) else 0} official adapters | "
+                f"{len(shadow) if isinstance(shadow, list) else 0} shadow adapters"
+            )
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))[:200]
     return lines[-1]
 
 
