@@ -1136,11 +1136,28 @@ def resolve_llm_provider(args: argparse.Namespace, secret_values: dict[str, str]
     return "not_configured"
 
 
+def default_mission_llm_provider(default_provider: str) -> str:
+    """Prefer a local executor for missions when the default LLM is chat-only."""
+    if default_provider in {"codex", "openai", "anthropic", "not_configured"}:
+        return default_provider
+    if detect_codex_cli()["present"]:
+        return "codex"
+    if detect_claude_code()["present"]:
+        return "anthropic"
+    return default_provider
+
+
 def resolve_llm_roles(args: argparse.Namespace, secret_values: dict[str, str]) -> dict[str, str]:
     default_provider = resolve_llm_provider(args, secret_values)
     roles: dict[str, str] = {}
     for role in LLM_ROLES:
-        roles[role] = str(getattr(args, f"{role}_llm_provider", None) or default_provider)
+        explicit = getattr(args, f"{role}_llm_provider", None)
+        if explicit:
+            roles[role] = str(explicit)
+        elif role == "mission":
+            roles[role] = default_mission_llm_provider(default_provider)
+        else:
+            roles[role] = default_provider
     return roles
 
 
@@ -4435,7 +4452,7 @@ def onboarding_guide_payload() -> dict[str, Any]:
                 "spark setup --llm-provider ollama --ollama-url http://localhost:11434 --ollama-model <MODEL>",
                 "spark setup --chat-llm-provider openai --builder-llm-provider openai --memory-llm-provider ollama --mission-llm-provider openai",
             ],
-            "llm_auth_note": "OpenAI can use a signed-in Codex CLI or OPENAI_API_KEY. Anthropic can use Claude Code or ANTHROPIC_API_KEY. Z.AI uses ZAI_API_KEY. Ollama is local.",
+            "llm_auth_note": "OpenAI can use a signed-in Codex CLI or OPENAI_API_KEY. Anthropic can use Claude Code or ANTHROPIC_API_KEY. Z.AI uses ZAI_API_KEY. Ollama is local. If your default chat LLM is not a local executor, Spark uses Codex or Claude for mission/build execution when available.",
         },
         "start": [
             "spark status",

@@ -111,6 +111,7 @@ from spark_cli.cli import (
     prompt_for_secret,
     ready_timeout_seconds,
     read_generated_env,
+    resolve_llm_roles,
     required_runtimes_for_modules,
     resolve_runtime_binary,
     run_llm_provider_wizard,
@@ -757,6 +758,30 @@ class SparkCliTests(unittest.TestCase):
         self.assertEqual(args.memory_llm_provider, "ollama")
         self.assertEqual(args.mission_llm_provider, "anthropic")
 
+    def test_resolve_llm_roles_defaults_chat_api_missions_to_codex_executor(self) -> None:
+        args = build_parser().parse_args(["setup", "--non-interactive", "--llm-provider", "zai"])
+        with patch("spark_cli.cli.detect_codex_cli", return_value={"present": True, "path": "codex"}):
+            roles = resolve_llm_roles(args, {"llm.zai.api_key": "zai-key"})
+        self.assertEqual(
+            roles,
+            {"chat": "zai", "builder": "zai", "memory": "zai", "mission": "codex"},
+        )
+
+    def test_resolve_llm_roles_keeps_explicit_mission_provider(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "setup",
+                "--non-interactive",
+                "--llm-provider",
+                "zai",
+                "--mission-llm-provider",
+                "zai",
+            ]
+        )
+        with patch("spark_cli.cli.detect_codex_cli", return_value={"present": True, "path": "codex"}):
+            roles = resolve_llm_roles(args, {"llm.zai.api_key": "zai-key"})
+        self.assertEqual(roles["mission"], "zai")
+
     def test_collect_setup_configuration_builds_state_without_install_side_effects(self) -> None:
         gateway = Module(
             name="spark-telegram-bot",
@@ -817,6 +842,7 @@ class SparkCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir, \
              patch("spark_cli.cli.fetch_secret", return_value=None), \
              patch("spark_cli.cli.fetch_generated_secret_value", return_value=None), \
+             patch("spark_cli.cli.detect_codex_cli", return_value={"present": True, "path": "codex"}), \
              patch("spark_cli.cli.spark_builder_home", return_value=Path(tmp_dir) / "builder-home"):
             secret_values, setup_state = collect_setup_configuration(args, [gateway], gateway, interactive=False)
 
@@ -829,7 +855,7 @@ class SparkCliTests(unittest.TestCase):
         self.assertEqual(setup_state["llm"]["provider"], "zai")
         self.assertEqual(
             {role: role_state["provider"] for role, role_state in setup_state["llm"]["roles"].items()},
-            {"chat": "zai", "builder": "zai", "memory": "zai", "mission": "zai"},
+            {"chat": "zai", "builder": "zai", "memory": "zai", "mission": "codex"},
         )
 
     def test_registry_sources_use_canonical_public_repos(self) -> None:
@@ -1186,6 +1212,7 @@ class SparkCliTests(unittest.TestCase):
             with patch.multiple("spark_cli.cli", **patches), \
                  patch("spark_cli.cli.load_registry_definition", return_value=registry), \
                  patch("spark_cli.cli.keychain_available", return_value=False), \
+                 patch("spark_cli.cli.detect_codex_cli", return_value={"present": True, "path": "codex"}), \
                  patch("sys.stdout", new_callable=StringIO) as stdout:
                 self.assertEqual(cmd_setup(args), 0)
             setup_output = stdout.getvalue()
@@ -1197,6 +1224,7 @@ class SparkCliTests(unittest.TestCase):
             self.assertIn("Need a bot token? Open @BotFather", setup_output)
             self.assertIn("LLM roles:", setup_output)
             self.assertIn("chat: zai", setup_output)
+            self.assertIn("mission: codex", setup_output)
             self.assertIn("Builder runtime: prepared Builder home", setup_output)
 
             expected = [
@@ -1226,7 +1254,7 @@ class SparkCliTests(unittest.TestCase):
             self.assertEqual(setup_state["llm"]["auth_mode"], "api_key")
             self.assertEqual(
                 {role: state["provider"] for role, state in setup_state["llm"]["roles"].items()},
-                {"chat": "zai", "builder": "zai", "memory": "zai", "mission": "zai"},
+                {"chat": "zai", "builder": "zai", "memory": "zai", "mission": "codex"},
             )
             expected_builder_home = state_dir / "spark-intelligence"
             self.assertEqual(setup_state["builder_home"], str(expected_builder_home))
@@ -1248,10 +1276,11 @@ class SparkCliTests(unittest.TestCase):
             self.assertIn("SPARK_CHAT_LLM_PROVIDER=zai", gateway_env)
             self.assertIn("SPARK_BUILDER_LLM_PROVIDER=zai", gateway_env)
             self.assertIn("SPARK_MEMORY_LLM_PROVIDER=zai", gateway_env)
-            self.assertIn("SPARK_MISSION_LLM_PROVIDER=zai", gateway_env)
+            self.assertIn("SPARK_MISSION_LLM_PROVIDER=codex", gateway_env)
             self.assertNotIn("BOT_TOKEN=", spawner_env)
             self.assertIn("SPARK_LLM_PROVIDER=zai", spawner_env)
             self.assertIn("SPARK_CHAT_LLM_PROVIDER=zai", spawner_env)
+            self.assertIn("DEFAULT_MISSION_PROVIDER=codex", spawner_env)
             self.assertNotIn("SPARK_SPARK_LLM_PROVIDER", spawner_env)
             self.assertNotIn("SPARK_ZAI_API_KEY", spawner_env)
             self.assertIn("MISSION_CONTROL_WEBHOOK_URLS=http://127.0.0.1:8788/spawner-events", spawner_env)
@@ -1671,19 +1700,20 @@ class SparkCliTests(unittest.TestCase):
             zai_base_url = "https://api.z.ai/api/coding/paas/v4/"
             zai_model = "glm-5.1"
 
-        envs = build_module_envs(
-            Args(),
-            {
-                gateway.name: gateway,
-                builder.name: builder,
-                spawner.name: spawner,
-            },
-            {
-                "telegram.bot_token": "abc",
-                "telegram.admin_ids": "123",
-                "llm.zai.api_key": "zai-key",
-            },
-        )
+        with patch("spark_cli.cli.detect_codex_cli", return_value={"present": True, "path": "/usr/local/bin/codex"}):
+            envs = build_module_envs(
+                Args(),
+                {
+                    gateway.name: gateway,
+                    builder.name: builder,
+                    spawner.name: spawner,
+                },
+                {
+                    "telegram.bot_token": "abc",
+                    "telegram.admin_ids": "123",
+                    "llm.zai.api_key": "zai-key",
+                },
+            )
 
         gateway_env = envs["spark-telegram-bot"]
         self.assertEqual(gateway_env["LLM_PROVIDER"], "zai")
@@ -1692,6 +1722,9 @@ class SparkCliTests(unittest.TestCase):
         self.assertEqual(gateway_env["ZAI_MODEL"], "glm-5.1")
         self.assertEqual(gateway_env["SPARK_CHAT_LLM_PROVIDER"], "zai")
         self.assertEqual(gateway_env["SPARK_CHAT_LLM_AUTH_MODE"], "api_key")
+        self.assertEqual(gateway_env["SPARK_MISSION_LLM_PROVIDER"], "codex")
+        self.assertEqual(envs["spawner-ui"]["DEFAULT_MISSION_PROVIDER"], "codex")
+        self.assertEqual(envs["spawner-ui"]["CODEX_PATH"], "/usr/local/bin/codex")
         self.assertEqual(envs["spawner-ui"]["SPARK_ZAI_MODEL"], "glm-5.1")
         self.assertEqual(envs["spawner-ui"]["SPARK_CHAT_LLM_PROVIDER"], "zai")
         self.assertNotIn("SPARK_ZAI_API_KEY", envs["spawner-ui"])
