@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,7 @@ from spark_cli.cli import (
     shell_command_env,
     setup_is_interactive,
     start_module,
+    stop_module,
     wait_for_ready_check,
     resolve_bundle_names,
     resolve_install_target,
@@ -1489,10 +1491,12 @@ class SparkCliTests(unittest.TestCase):
                  patch("spark_cli.cli.save_pids"), \
                  patch("spark_cli.cli.LOG_DIR", Path(tmp_dir) / "logs"), \
                  patch("spark_cli.cli.module_runtime_env", return_value={}), \
-                 patch("spark_cli.cli.subprocess.Popen", return_value=RunningProcess()), \
+                 patch("spark_cli.cli.os.name", "posix"), \
+                 patch("spark_cli.cli.subprocess.Popen", return_value=RunningProcess()) as popen, \
                  patch("spark_cli.cli.wait_for_ready_check", return_value=(False, "not ready yet")), \
                  patch("sys.stdout", new_callable=StringIO):
                 self.assertTrue(start_module(module, allow_boot_warnings=True))
+            self.assertTrue(popen.call_args.kwargs["start_new_session"])
 
     def test_start_module_fails_boot_warning_when_process_exits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1515,10 +1519,30 @@ class SparkCliTests(unittest.TestCase):
                  patch("spark_cli.cli.save_pids"), \
                  patch("spark_cli.cli.LOG_DIR", Path(tmp_dir) / "logs"), \
                  patch("spark_cli.cli.module_runtime_env", return_value={}), \
+                 patch("spark_cli.cli.os.name", "posix"), \
                  patch("spark_cli.cli.subprocess.Popen", return_value=ExitedProcess()), \
                  patch("spark_cli.cli.wait_for_ready_check", return_value=(False, "not ready yet")), \
                  patch("sys.stdout", new_callable=StringIO):
                 self.assertFalse(start_module(module, allow_boot_warnings=True))
+
+    def test_stop_module_terminates_posix_process_group(self) -> None:
+        with patch("spark_cli.cli.os.name", "posix"), \
+             patch("spark_cli.cli.os.killpg") as killpg, \
+             patch("spark_cli.cli.subprocess.run") as run, \
+             patch("sys.stdout", new_callable=StringIO):
+            stop_module("spawner-ui", 12345)
+
+        killpg.assert_called_once_with(12345, signal.SIGTERM)
+        run.assert_not_called()
+
+    def test_stop_module_falls_back_to_single_posix_pid(self) -> None:
+        with patch("spark_cli.cli.os.name", "posix"), \
+             patch("spark_cli.cli.os.killpg", side_effect=ProcessLookupError()), \
+             patch("spark_cli.cli.subprocess.run") as run, \
+             patch("sys.stdout", new_callable=StringIO):
+            stop_module("spawner-ui", 12345)
+
+        run.assert_called_once_with(["kill", "12345"], check=False, capture_output=True)
 
     def test_required_runtimes_for_modules_dedups_across_bundle(self) -> None:
         python_module = Module(

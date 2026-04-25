@@ -8,6 +8,7 @@ import re
 import secrets as py_secrets
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -2214,22 +2215,21 @@ def start_module(module: Module, *, allow_boot_warnings: bool = False) -> bool:
     log_path = module_log_dir / "process.log"
     log_handle = log_path.open("a", encoding="utf-8")
 
-    creationflags = 0
-    if os.name == "nt":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-
     subprocess_env = module_runtime_env(module)
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(module.path),
+        "shell": True,
+        "stdout": log_handle,
+        "stderr": subprocess.STDOUT,
+        "env": subprocess_env,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        popen_kwargs["start_new_session"] = True
 
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=str(module.path),
-            shell=True,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            creationflags=creationflags,
-            env=subprocess_env,
-        )
+        process = subprocess.Popen(command, **popen_kwargs)
     finally:
         log_handle.close()
     pids[module.name] = {
@@ -2273,7 +2273,10 @@ def stop_module(name: str, pid: int) -> None:
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False, capture_output=True)
     else:
-        subprocess.run(["kill", str(pid)], check=False, capture_output=True)
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except OSError:
+            subprocess.run(["kill", str(pid)], check=False, capture_output=True)
     print(f"Stopped {name} (pid {pid})")
 
 
