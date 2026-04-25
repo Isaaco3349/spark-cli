@@ -11,6 +11,7 @@ import unittest
 import urllib.error
 from io import StringIO
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from spark_cli.cli import (
@@ -1606,6 +1607,34 @@ class SparkCliTests(unittest.TestCase):
         self.assertFalse(ready)
         self.assertEqual(detail, "process exited with code 1")
 
+    def test_wait_for_ready_check_rejects_process_that_exits_after_initial_poll(self) -> None:
+        module = Module(
+            name="polling-target",
+            path=Path("C:/tmp/polling-target"),
+            manifest={
+                "module": {"name": "polling-target", "version": "0.1.0", "kind": "service", "plane": "ingress"},
+                "run": {"default": {"ready_check": "process"}},
+                "healthcheck": {"timeout_seconds": 10},
+            },
+        )
+
+        class EventuallyExitedProcess:
+            def __init__(self) -> None:
+                self.polls = 0
+
+            def poll(self) -> int | None:
+                self.polls += 1
+                if self.polls >= 3:
+                    return 1
+                return None
+
+        with patch("spark_cli.cli.time.time", side_effect=[100.0, 100.1, 101.0, 102.0]), \
+             patch("spark_cli.cli.time.sleep", return_value=None):
+            ready, detail = wait_for_ready_check(module, process=EventuallyExitedProcess())  # type: ignore[arg-type]
+
+        self.assertFalse(ready)
+        self.assertEqual(detail, "process exited with code 1")
+
     def test_evaluate_module_health_passes_configured_timeout(self) -> None:
         module = Module(
             name="health-target",
@@ -1709,6 +1738,41 @@ class SparkCliTests(unittest.TestCase):
                  patch("spark_cli.cli.wait_for_ready_check", return_value=(False, "not ready yet")), \
                  patch("sys.stdout", new_callable=StringIO):
                 self.assertFalse(start_module(module, allow_boot_warnings=True))
+
+    def test_start_module_removes_pid_record_when_process_exits_during_ready_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            module = Module(
+                name="failed-telegram",
+                path=Path(tmp_dir),
+                manifest={
+                    "module": {"name": "failed-telegram", "version": "0.1.0", "kind": "service", "plane": "ingress"},
+                    "run": {"default": {"command": "npm run dev", "ready_check": "process"}},
+                },
+            )
+
+            class ExitedProcess:
+                pid = 12347
+
+                def poll(self) -> int:
+                    return 1
+
+            saved_payloads: list[dict[str, Any]] = []
+
+            def fake_save(payload: dict[str, Any]) -> None:
+                saved_payloads.append(dict(payload))
+
+            with patch("spark_cli.cli.load_pids", side_effect=[{}, {"failed-telegram": {"pid": 12347}}]), \
+                 patch("spark_cli.cli.save_pids", side_effect=fake_save), \
+                 patch("spark_cli.cli.LOG_DIR", Path(tmp_dir) / "logs"), \
+                 patch("spark_cli.cli.module_runtime_env", return_value={}), \
+                 patch("spark_cli.cli.os.name", "posix"), \
+                 patch("spark_cli.cli.subprocess.Popen", return_value=ExitedProcess()), \
+                 patch("spark_cli.cli.wait_for_ready_check", return_value=(False, "process exited with code 1")), \
+                 patch("sys.stdout", new_callable=StringIO):
+                self.assertFalse(start_module(module))
+
+            self.assertIn("failed-telegram", saved_payloads[0])
+            self.assertEqual(saved_payloads[-1], {})
 
     def test_stop_module_terminates_posix_process_group(self) -> None:
         with patch("spark_cli.cli.os.name", "posix"), \

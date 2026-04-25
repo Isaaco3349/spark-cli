@@ -3010,7 +3010,7 @@ def wait_for_ready_check(module: Module, process: subprocess.Popen[Any] | None =
     if ready_check == "process":
         if process is None:
             return False, "process ready check requires a spawned process"
-        stable_until = time.time() + min(2, timeout_seconds)
+        stable_until = time.time() + min(5, timeout_seconds)
         while time.time() < stable_until:
             exit_code = process.poll()
             if exit_code is not None:
@@ -3104,6 +3104,12 @@ def start_module(module: Module, *, allow_boot_warnings: bool = False) -> bool:
         print(f"Ready {module.name}: {detail}")
     else:
         print(f"Start warning for {module.name}: {format_start_warning(module, detail, process)}")
+        if process.poll() is not None:
+            latest_pids = load_pids()
+            latest_record = latest_pids.get(module.name, {})
+            if int(latest_record.get("pid", 0)) == int(process.pid):
+                latest_pids.pop(module.name, None)
+                save_pids(latest_pids)
         if allow_boot_warnings and process.poll() is None:
             return True
     return ready
