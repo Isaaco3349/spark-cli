@@ -43,6 +43,7 @@ from spark_cli.cli import (
     pull_module_source,
     remove_tree,
     install_module_record,
+    keychain_account,
     keychain_env_for_module,
     list_stored_secrets,
     load_json,
@@ -2306,6 +2307,58 @@ class SparkCliTests(unittest.TestCase):
                 self.assertTrue(delete_secret("telegram.bot_token"))
                 self.assertIsNone(fetch_secret("telegram.bot_token"))
                 self.assertEqual(list_stored_secrets(), {})
+
+    def test_keychain_secret_accounts_are_namespaced_by_spark_home(self) -> None:
+        with tempfile.TemporaryDirectory() as first_dir, tempfile.TemporaryDirectory() as second_dir:
+            first_home = Path(first_dir) / "spark-a"
+            second_home = Path(second_dir) / "spark-b"
+
+            class FakeKeyring:
+                def __init__(self) -> None:
+                    self.values: dict[tuple[str, str], str] = {}
+
+                def get_password(self, service: str, account: str) -> str | None:
+                    return self.values.get((service, account))
+
+                def set_password(self, service: str, account: str, value: str) -> None:
+                    self.values[(service, account)] = value
+
+                def delete_password(self, service: str, account: str) -> None:
+                    self.values.pop((service, account), None)
+
+            fake = FakeKeyring()
+
+            with patch("spark_cli.cli._keyring", fake), \
+                 patch("spark_cli.cli.HAS_KEYRING", True), \
+                 patch("spark_cli.cli.keychain_available", return_value=True), \
+                 patch("spark_cli.cli.SPARK_HOME", first_home), \
+                 patch("spark_cli.cli.CONFIG_DIR", first_home / "config"), \
+                 patch("spark_cli.cli.STATE_DIR", first_home / "state"), \
+                 patch("spark_cli.cli.MODULE_CONFIG_DIR", first_home / "config" / "modules"), \
+                 patch("spark_cli.cli.LOG_DIR", first_home / "logs"), \
+                 patch("spark_cli.cli.SECRETS_INDEX_PATH", first_home / "config" / "secrets_index.json"), \
+                 patch("spark_cli.cli.SECRETS_FILE_PATH", first_home / "config" / "secrets.local.json"):
+                first_account = keychain_account("telegram.bot_token")
+                self.assertEqual(store_secret("telegram.bot_token", "first-token", preferred="keychain"), "keychain")
+                self.assertEqual(fetch_secret("telegram.bot_token"), "first-token")
+
+            with patch("spark_cli.cli._keyring", fake), \
+                 patch("spark_cli.cli.HAS_KEYRING", True), \
+                 patch("spark_cli.cli.keychain_available", return_value=True), \
+                 patch("spark_cli.cli.SPARK_HOME", second_home), \
+                 patch("spark_cli.cli.CONFIG_DIR", second_home / "config"), \
+                 patch("spark_cli.cli.STATE_DIR", second_home / "state"), \
+                 patch("spark_cli.cli.MODULE_CONFIG_DIR", second_home / "config" / "modules"), \
+                 patch("spark_cli.cli.LOG_DIR", second_home / "logs"), \
+                 patch("spark_cli.cli.SECRETS_INDEX_PATH", second_home / "config" / "secrets_index.json"), \
+                 patch("spark_cli.cli.SECRETS_FILE_PATH", second_home / "config" / "secrets.local.json"):
+                second_account = keychain_account("telegram.bot_token")
+                self.assertNotEqual(first_account, second_account)
+                self.assertEqual(store_secret("telegram.bot_token", "second-token", preferred="keychain"), "keychain")
+                self.assertEqual(fetch_secret("telegram.bot_token"), "second-token")
+
+            self.assertEqual(fake.values[("spark-cli", first_account)], "first-token")
+            self.assertEqual(fake.values[("spark-cli", second_account)], "second-token")
 
     def test_persist_keychain_secrets_stores_only_keychain_declared(self) -> None:
         gateway = Module(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -267,6 +268,29 @@ def keychain_available() -> bool:
     return True
 
 
+def default_spark_home() -> Path:
+    return Path.home().joinpath(".spark").expanduser()
+
+
+def keychain_namespace() -> str:
+    try:
+        raw = str(SPARK_HOME.resolve()).lower()
+    except OSError:
+        raw = str(SPARK_HOME.absolute()).lower()
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def keychain_account(secret_id: str) -> str:
+    return f"{secret_id}@{keychain_namespace()}"
+
+
+def default_home_uses_legacy_keychain() -> bool:
+    try:
+        return SPARK_HOME.resolve() == default_spark_home().resolve()
+    except OSError:
+        return SPARK_HOME.absolute() == default_spark_home().absolute()
+
+
 def load_secrets_index() -> dict[str, str]:
     return load_json(SECRETS_INDEX_PATH, {})
 
@@ -281,7 +305,7 @@ def store_secret(secret_id: str, value: str, preferred: str = "keychain") -> str
     index = load_secrets_index()
     if preferred == "keychain" and keychain_available():
         try:
-            _keyring.set_password(KEYCHAIN_SERVICE, secret_id, value)
+            _keyring.set_password(KEYCHAIN_SERVICE, keychain_account(secret_id), value)
             index[secret_id] = "keychain"
             save_secrets_index(index)
             return "keychain"
@@ -304,7 +328,12 @@ def fetch_secret(secret_id: str) -> str | None:
     backend = index.get(secret_id)
     if backend == "keychain" and HAS_KEYRING:
         try:
-            return _keyring.get_password(KEYCHAIN_SERVICE, secret_id)
+            value = _keyring.get_password(KEYCHAIN_SERVICE, keychain_account(secret_id))
+            if value is not None:
+                return value
+            if default_home_uses_legacy_keychain():
+                return _keyring.get_password(KEYCHAIN_SERVICE, secret_id)
+            return None
         except Exception:
             return None
     if backend == "file":
@@ -318,10 +347,16 @@ def delete_secret(secret_id: str) -> bool:
     removed = False
     if backend == "keychain" and HAS_KEYRING:
         try:
-            _keyring.delete_password(KEYCHAIN_SERVICE, secret_id)
+            _keyring.delete_password(KEYCHAIN_SERVICE, keychain_account(secret_id))
             removed = True
         except Exception:
             pass
+        if default_home_uses_legacy_keychain():
+            try:
+                _keyring.delete_password(KEYCHAIN_SERVICE, secret_id)
+                removed = True
+            except Exception:
+                pass
     if backend == "file":
         file_secrets = load_json(SECRETS_FILE_PATH, {})
         if secret_id in file_secrets:
