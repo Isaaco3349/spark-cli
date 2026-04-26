@@ -1203,6 +1203,10 @@ class SparkCliTests(unittest.TestCase):
                 "/tmp/spark start --allow-boot-warnings telegram-starter",
             )
 
+    def test_autostart_shell_command_rejects_shell_target_text(self) -> None:
+        with self.assertRaises(SystemExit):
+            autostart_shell_command("start", "telegram-starter && calc")
+
     def test_autostart_shell_command_includes_configured_telegram_profiles(self) -> None:
         setup_state = {
             "telegram_profiles": {

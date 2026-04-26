@@ -55,6 +55,7 @@ DEFAULT_TELEGRAM_PROFILE = "default"
 DEFAULT_PRIMARY_TELEGRAM_PROFILE = "primary"
 PRIMARY_TELEGRAM_PROFILE_KEY = "primary_telegram_profile"
 TELEGRAM_PROFILE_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,38}[a-z0-9]$")
+AUTOSTART_TARGET_PATTERN = re.compile(r"^[a-z0-9-]+$")
 GIT_COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 
 try:  # keyring is an optional runtime dep; we degrade gracefully without it.
@@ -4495,7 +4496,15 @@ def autostart_should_include_telegram_profiles(target: str) -> bool:
     return target in {"telegram-starter", "spark-telegram-bot"}
 
 
+def validate_autostart_target(target: str) -> str:
+    value = str(target or "").strip()
+    if not AUTOSTART_TARGET_PATTERN.fullmatch(value):
+        raise SystemExit("Autostart target must match ^[a-z0-9-]+$.")
+    return value
+
+
 def spark_action_shell_command(action: str, target: str, *, profile: str | None = None) -> str:
+    target = validate_autostart_target(target)
     args = spark_invocation_args() + [action]
     if action == "start":
         args.append("--allow-boot-warnings")
@@ -4506,6 +4515,7 @@ def spark_action_shell_command(action: str, target: str, *, profile: str | None 
 
 
 def autostart_shell_commands(action: str, target: str) -> list[str]:
+    target = validate_autostart_target(target)
     base_command = spark_action_shell_command(action, target)
     if not autostart_should_include_telegram_profiles(target):
         return [base_command]
@@ -4634,7 +4644,7 @@ def print_helper_failure(command: list[str], result: subprocess.CompletedProcess
 
 def cmd_autostart_install(args: argparse.Namespace) -> int:
     ensure_state_dirs()
-    target = args.target or "telegram-starter"
+    target = validate_autostart_target(args.target or "telegram-starter")
     start_command = autostart_shell_command("start", target)
     stop_command = autostart_shell_command("stop", target)
     failures = 0
