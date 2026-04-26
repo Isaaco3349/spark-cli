@@ -4866,6 +4866,7 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("Test-InstallSettings", script)
         self.assertIn("Refusing non-canonical Spark CLI source", script)
         self.assertIn("if ($RefWasProvided -and $Ref -and -not $AllowDevSource)", script)
+        self.assertIn("function Invoke-GitQuiet", script)
         self.assertIn("function Checkout-CliRef", script)
         self.assertIn('if ($BotToken) { $setupArgs += @("--bot-token", (New-SetupSecretRef $BotToken)) }', script)
         self.assertIn('if ($AdminTelegramIds) { $setupArgs += @("--admin-telegram-ids", $AdminTelegramIds) }', script)
