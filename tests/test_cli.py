@@ -1799,7 +1799,7 @@ class SparkCliTests(unittest.TestCase):
 
         self.assertNotIn("spark-intelligence-builder: no run.default", output.getvalue())
 
-    def test_start_command_uses_default_bot_and_configured_telegram_profiles(self) -> None:
+    def test_start_command_uses_configured_telegram_profiles_instead_of_default_bot(self) -> None:
         spawner = Module(
             name="spawner-ui",
             path=Path("C:/tmp/spawner-ui"),
@@ -1833,7 +1833,6 @@ class SparkCliTests(unittest.TestCase):
             started,
             [
                 ("spawner-ui", "default"),
-                ("spark-telegram-bot", "default"),
                 ("spark-telegram-bot", "spark-agi"),
             ],
         )
@@ -2513,7 +2512,7 @@ class SparkCliTests(unittest.TestCase):
 
         self.assertEqual(
             expected_runtime_process_names({"spark-telegram-bot", "spawner-ui"}, setup_state),
-            ["spark-telegram-bot", "spawner-ui", "spark-telegram-bot:spark-agi"],
+            ["spawner-ui", "spark-telegram-bot:spark-agi"],
         )
 
     def test_expected_runtime_process_names_uses_default_bot_without_profiles(self) -> None:

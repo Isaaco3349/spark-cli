@@ -3804,11 +3804,12 @@ def process_runtime_detail(pids: dict[str, Any], module_names: list[str]) -> tup
 
 def expected_runtime_process_names(installed_names: set[str], setup_state: dict[str, Any]) -> list[str]:
     names: list[str] = []
-    if "spark-telegram-bot" in installed_names:
+    profiles = setup_state.get("telegram_profiles") if isinstance(setup_state, dict) else None
+    has_profiles = isinstance(profiles, dict) and bool(profiles)
+    if "spark-telegram-bot" in installed_names and not has_profiles:
         names.append("spark-telegram-bot")
     if "spawner-ui" in installed_names:
         names.append("spawner-ui")
-    profiles = setup_state.get("telegram_profiles") if isinstance(setup_state, dict) else None
     if isinstance(profiles, dict) and "spark-telegram-bot" in installed_names:
         for profile, profile_state in sorted(profiles.items()):
             if isinstance(profile_state, dict):
@@ -3942,14 +3943,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                 print(f"Skipping {module.name}: no run.default command declared")
             continue
         if module.name == "spark-telegram-bot" and profile == DEFAULT_TELEGRAM_PROFILE:
-            if not start_module(
-                module,
-                allow_boot_warnings=getattr(args, "allow_boot_warnings", False),
-                profile=DEFAULT_TELEGRAM_PROFILE,
-            ):
-                exit_code = 1
             profiles = autostart_telegram_profiles()
-            for telegram_profile in profiles:
+            for telegram_profile in profiles or [DEFAULT_TELEGRAM_PROFILE]:
                 if not start_module(
                     module,
                     allow_boot_warnings=getattr(args, "allow_boot_warnings", False),
@@ -4041,14 +4036,8 @@ def cmd_restart(args: argparse.Namespace) -> int:
             print(f"Skipping {module.name}: no run.default command declared")
             continue
         if module.name == "spark-telegram-bot":
-            if not start_module(
-                module,
-                allow_boot_warnings=getattr(args, "allow_boot_warnings", False),
-                profile=DEFAULT_TELEGRAM_PROFILE,
-            ):
-                start_code = 1
             profiles = autostart_telegram_profiles()
-            for telegram_profile in profiles:
+            for telegram_profile in profiles or [DEFAULT_TELEGRAM_PROFILE]:
                 if not start_module(
                     module,
                     allow_boot_warnings=getattr(args, "allow_boot_warnings", False),
