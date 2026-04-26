@@ -50,6 +50,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_REGISTRY_PATH = REPO_ROOT / "registry.json"
 DEFAULT_TELEGRAM_PROFILE = "default"
 TELEGRAM_PROFILE_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,38}[a-z0-9]$")
+GIT_COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 
 try:  # keyring is an optional runtime dep; we degrade gracefully without it.
     import keyring as _keyring
@@ -214,9 +215,64 @@ def git_command(*args: str) -> list[str]:
     return ["git", "-c", "core.longpaths=true", *args]
 
 
-def clone_module_source(name: str, source: str) -> Path:
+def validate_commit_pin(commit: str | None) -> str | None:
+    value = (commit or "").strip()
+    if not value:
+        return None
+    if not GIT_COMMIT_SHA_PATTERN.fullmatch(value):
+        raise SystemExit("Registry commit pins must be full 40-character Git SHA-1 values.")
+    return value.lower()
+
+
+def run_git_or_exit(name: str, args: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        git_command(*args),
+        cwd=str(cwd) if cwd else None,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or "unknown git error"
+        raise SystemExit(f"git operation failed for {name}: {detail}")
+    return result
+
+
+def verify_pinned_commit(name: str, target: Path, commit: str, *, require_signed_commit: bool) -> None:
+    verify_result = subprocess.run(
+        git_command("-C", str(target), "verify-commit", commit),
+        capture_output=True,
+        text=True,
+    )
+    if require_signed_commit and verify_result.returncode != 0:
+        detail = (verify_result.stderr or verify_result.stdout).strip() or "commit is not signed or cannot be verified"
+        raise SystemExit(f"git signature verification failed for {name} at {commit}: {detail}")
+    run_git_or_exit(name, ["-C", str(target), "checkout", "--detach", commit])
+    resolved = run_git_or_exit(name, ["-C", str(target), "rev-parse", "HEAD"]).stdout.strip().lower()
+    if resolved != commit:
+        raise SystemExit(f"git checkout mismatch for {name}: expected {commit}, got {resolved}")
+
+
+def clone_module_source(
+    name: str,
+    source: str,
+    *,
+    commit: str | None = None,
+    require_signed_commit: bool = False,
+) -> Path:
     target = clone_target_for_module(name)
     if (target / "spark.toml").exists() and (target / ".git").exists():
+        pinned_commit = validate_commit_pin(commit)
+        if pinned_commit:
+            resolved = subprocess.run(
+                git_command("-C", str(target), "rev-parse", "HEAD"),
+                capture_output=True,
+                text=True,
+            )
+            if resolved.returncode != 0 or resolved.stdout.strip().lower() != pinned_commit:
+                raise SystemExit(
+                    f"Installed clone for {name} is not at pinned commit {pinned_commit}. "
+                    "Run `spark uninstall` for the module and reinstall it."
+                )
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and not (target / ".git").exists():
@@ -224,6 +280,14 @@ def clone_module_source(name: str, source: str) -> Path:
             f"Cannot clone {name}: {target} exists but is not a git checkout. Remove it first."
         )
     url = normalize_git_url(source)
+    pinned_commit = validate_commit_pin(commit)
+    if pinned_commit:
+        target.mkdir(parents=True, exist_ok=True)
+        run_git_or_exit(name, ["-C", str(target), "init", "-q"])
+        run_git_or_exit(name, ["-C", str(target), "remote", "add", "origin", url])
+        run_git_or_exit(name, ["-C", str(target), "fetch", "--depth=1", "origin", pinned_commit])
+        verify_pinned_commit(name, target, pinned_commit, require_signed_commit=require_signed_commit)
+        return target
     result = subprocess.run(
         git_command("clone", "--depth=1", url, str(target)),
         capture_output=True,
@@ -1939,7 +2003,12 @@ def resolve_install_target(target: str, modules: dict[str, Module]) -> Module:
     if registry_metadata:
         source = str(registry_metadata.get("source", ""))
         if is_git_source(source):
-            clone_path = clone_module_source(target, source)
+            clone_path = clone_module_source(
+                target,
+                source,
+                commit=str(registry_metadata.get("commit", "")),
+                require_signed_commit=bool(registry_metadata.get("require_signed_commit", False)),
+            )
             return load_module(clone_path)
         if source and Path(source).exists():
             manifest_path = Path(source) / "spark.toml"

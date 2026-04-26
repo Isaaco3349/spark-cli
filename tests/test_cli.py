@@ -151,6 +151,7 @@ from spark_cli.cli import (
     summarize_command_output,
     update_setup_state_after_uninstall,
     update_env_file,
+    validate_commit_pin,
     windows_startup_script_path,
     write_windows_startup_script,
     write_runtime_shim,
@@ -1087,6 +1088,8 @@ class SparkCliTests(unittest.TestCase):
             with self.subTest(module=name):
                 self.assertTrue(source.startswith("https://github.com/vibeforge1111/"))
                 self.assertNotIn("github.com/spark/", source)
+                commit = str(registry["modules"][name].get("commit", ""))
+                self.assertEqual(validate_commit_pin(commit), commit)
 
     def test_autostart_install_defaults_to_telegram_starter_and_now_is_optional(self) -> None:
         args = build_parser().parse_args(["autostart", "install", "--now"])
@@ -3267,6 +3270,48 @@ class SparkCliTests(unittest.TestCase):
                 self.assertTrue(ok)
                 self.assertTrue((cloned / "extra.txt").exists())
                 self.assertEqual(clone_target_for_module("git-demo"), clone_home / "modules" / "git-demo" / "source")
+
+    def test_clone_module_source_checks_out_pinned_commit(self) -> None:
+        if not shutil.which("git"):
+            self.skipTest("git not available on PATH")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            work = tmp / "work"
+            work.mkdir()
+            subprocess.run(["git", "-C", str(work), "init", "-q"], check=True)
+            subprocess.run(["git", "-C", str(work), "config", "user.email", "t@t"], check=True)
+            subprocess.run(["git", "-C", str(work), "config", "user.name", "t"], check=True)
+            (work / "spark.toml").write_text(
+                '[module]\nname = "git-demo"\nversion = "0.1.0"\nkind = "service"\nplane = "execution"\n',
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "-C", str(work), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(work), "commit", "-q", "-m", "init"], check=True)
+            first_commit = subprocess.run(
+                ["git", "-C", str(work), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (work / "extra.txt").write_text("latest branch content", encoding="utf-8")
+            subprocess.run(["git", "-C", str(work), "add", "extra.txt"], check=True)
+            subprocess.run(["git", "-C", str(work), "commit", "-q", "-m", "second"], check=True)
+
+            bare = tmp / "remote.git"
+            subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
+
+            clone_home = tmp / "spark-home"
+            with patch("spark_cli.cli.SPARK_HOME", clone_home):
+                cloned = clone_module_source("git-demo", str(bare), commit=first_commit)
+                self.assertTrue((cloned / "spark.toml").exists())
+                self.assertFalse((cloned / "extra.txt").exists())
+                head = subprocess.run(
+                    ["git", "-C", str(cloned), "rev-parse", "HEAD"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                self.assertEqual(head, first_commit)
 
     def test_git_command_enables_long_paths_for_registry_clones(self) -> None:
         self.assertEqual(
