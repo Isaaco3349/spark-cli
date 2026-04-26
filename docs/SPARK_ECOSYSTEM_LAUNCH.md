@@ -13,6 +13,7 @@ The default bundle is `telegram-starter`.
 | Module | Launch role | Owns |
 |---|---|---|
 | `spark-researcher` | Research, advisory packets, chip authoring, bounded improvement loops | research runtime and memory packet workflows |
+| `spark-character` | Persona, voice consistency, scoring, and opt-in character evolution | Spark character runtime and voice evaluation |
 | `spark-intelligence-builder` | Runtime core for identity, provider routing, memory bridge, and adapter logic | Builder state, provider profiles, domain-chip activation |
 | `domain-chip-memory` | Default memory/domain chip substrate | memory benchmark logic, packet discipline, chip evaluation |
 | `spawner-ui` | Local execution plane and mission board | missions, project creation flows, multi-step execution UI |
@@ -24,6 +25,7 @@ The default bundle is `telegram-starter`.
 Telegram user
   -> spark-telegram-bot
   -> spark-intelligence-builder for memory, researcher, identity, and LLM routing
+  -> spark-character for persona rendering, voice scoring, and output sanitizing
   -> domain-chip-memory when Builder activates the default memory chip
   -> spark-researcher for research/advisory/chip-authoring flows
   -> spawner-ui for missions, project creation, and execution
@@ -81,6 +83,6 @@ Expected:
 
 - `telegram-starter` is the configured bundle
 - `spark-telegram-bot` is the Telegram ingress owner
-- all five starter modules are installed
+- all starter modules are installed
 - the selected LLM provider is reflected in generated metadata
 - repair hints do not mention `SPARK_API_URL`, `SPARK_DASHBOARD_URL`, or port `8787`

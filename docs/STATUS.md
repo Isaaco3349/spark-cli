@@ -26,16 +26,16 @@ repair loop.
 
 Verified in WSL sandbox:
 
-- `spark setup` with a local registry override installed/registers the five
+- `spark setup` with a local registry override installed/registers the
   starter modules in a disposable `$HOME`
-- generated per-module config files for all five modules
+- generated per-module config files for all starter modules
 - selected `spark-telegram-bot` as the only Telegram ingress owner
 
 Verified again during the launch pass:
 
 - `python -m pytest tests/test_cli.py -q` -> 98 passed
-- Windows temp `SPARK_HOME` setup cloned/registers all five starter modules
-- WSL Ubuntu temp `SPARK_HOME` setup cloned/registers all five starter modules
+- Windows temp `SPARK_HOME` setup cloned/registers all starter modules
+- WSL Ubuntu temp `SPARK_HOME` setup cloned/registers all starter modules
 - default LLM provider wiring supports Z.AI GLM (`glm-5.1`) without writing raw keys to generated module env files
 - dashboard/resonance API is deferred; starter installs should not require `SPARK_API_URL`, `SPARK_DASHBOARD_URL`, or a local service on port 8787
 

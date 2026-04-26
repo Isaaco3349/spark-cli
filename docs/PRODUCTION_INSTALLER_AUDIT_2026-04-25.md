@@ -20,6 +20,7 @@ flowchart TD
   Venv --> Setup["spark setup telegram-starter"]
   Setup --> Registry["registry.json starter bundle"]
   Registry --> Researcher["spark-researcher"]
+  Registry --> Character["spark-character"]
   Registry --> Builder["spark-intelligence-builder"]
   Registry --> Memory["domain-chip-memory"]
   Registry --> Spawner["spawner-ui"]
@@ -31,13 +32,14 @@ flowchart TD
 
 ## What We Are Actually Using
 
-The launch starter stack is five modules in this order:
+The launch starter stack is six modules in this order:
 
 1. `spark-researcher`
-2. `spark-intelligence-builder`
-3. `domain-chip-memory`
-4. `spawner-ui`
-5. `spark-telegram-bot`
+2. `spark-character`
+3. `spark-intelligence-builder`
+4. `domain-chip-memory`
+5. `spawner-ui`
+6. `spark-telegram-bot`
 
 Installer-side responsibilities:
 
@@ -55,7 +57,7 @@ CLI-side responsibilities:
 - Run install commands for fresh modules.
 - Reuse installed modules on `spark setup --resume`, unless `--run-install-commands` is explicitly passed.
 - Store keychain-backed secrets outside generated env.
-- Generate module env files that connect Telegram, Builder, Memory, Spawner, Researcher, and LLM roles.
+- Generate module env files that connect Telegram, Builder, Character, Memory, Spawner, Researcher, and LLM roles.
 - Provide `spark status`, `spark verify`, `spark fix telegram`, and logs as repair surfaces.
 
 ## Fixed During This Audit
@@ -158,7 +160,7 @@ Fix:
    - install CLI
    - setup with fake tokens and `--skip-install-commands`
    - `spark status --json`
-   - assert all five modules are registered and LLM roles are configured
+   - assert all starter modules are registered and LLM roles are configured
 
 ## Current Test Evidence
 
@@ -168,4 +170,3 @@ Fix:
   - first-class Windows setup flags
   - system Node reuse
   - hardened public installer hash
-

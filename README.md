@@ -21,6 +21,7 @@ spark status
 That default setup installs:
 
 - `spark-researcher`
+- `spark-character`
 - `spark-intelligence-builder`
 - `domain-chip-memory`
 - `spawner-ui`
@@ -30,7 +31,7 @@ If another `spark` binary is already on your PATH, use `spark-local`. The packag
 
 ## What Spark CLI Does
 
-Spark CLI is the installer and operator shell for the Spark ecosystem. It gives a normal user one path instead of five separate repo installs.
+Spark CLI is the installer and operator shell for the Spark ecosystem. It gives a normal user one path instead of several separate repo installs.
 
 ```mermaid
 flowchart TD
@@ -193,7 +194,7 @@ For a fuller launch-readiness proof, run:
 spark verify
 ```
 
-It checks the five-module starter bundle, module healthchecks, LLM roles, Telegram long-polling/security, Builder memory + Researcher wiring, Spawner mission relay, and whether the Telegram bot plus Spawner UI are actually running.
+It checks the starter bundle, module healthchecks, LLM roles, Telegram long-polling/security, Builder memory + Researcher wiring, Spawner mission relay, and whether the Telegram bot plus Spawner UI are actually running.
 
 For a live write/read proof that Builder can reach `domain-chip-memory`, run:
 
@@ -220,6 +221,7 @@ The runtime shape is:
 flowchart LR
   User["Telegram user"] --> Bot["spark-telegram-bot"]
   Bot --> Builder["spark-intelligence-builder"]
+  Builder --> Character["spark-character"]
   Builder --> Memory["domain-chip-memory"]
   Builder --> Researcher["spark-researcher"]
   Bot --> Spawner["spawner-ui"]
@@ -234,7 +236,7 @@ Setup writes the shared env that makes the pieces talk to each other:
 - Telegram and Spawner share the mission relay URL.
 - Telegram receives `SPARK_BUILDER_HOME`, `SPARK_BUILDER_REPO`, and `SPARK_BUILDER_BRIDGE_MODE=required`, so memory commands go through Builder instead of a local no-op adapter.
 - Telegram, Spawner, and Builder get selected non-secret LLM provider metadata for chat, builder, memory, and mission roles.
-- Builder is initialized with memory enabled, `shadow_mode=false`, `domain-chip-memory` active, and `spark-researcher` connected.
+- Builder is initialized with `spark-character`, memory enabled, `shadow_mode=false`, `domain-chip-memory` active, and `spark-researcher` connected.
 - Cloud API keys are stored through Spark's secret backend and are not written into generated module env files. OpenAI can also use a signed-in Codex CLI, and Anthropic can use Claude Code, when those CLIs are installed and signed in.
 
 The older dashboard/resonance API is intentionally not part of the launch starter path. Fresh installs should not require `SPARK_API_URL`, `SPARK_DASHBOARD_URL`, or a local service on port `8787`.
@@ -276,7 +278,7 @@ If the bot does not reply, run `spark fix telegram` first. It is the fastest pat
 If you are an LLM agent installing Spark for a user:
 
 1. Prefer the official site/script path the user gives you, or clone `spark-cli` directly if developing locally.
-2. Run `spark setup` first; do not install the five core repos one by one unless debugging.
+2. Run `spark setup` first; do not install the core repos one by one unless debugging.
 3. Use `spark status --json` before declaring the install healthy, and check that the LLM role summary matches the user's intended chat, builder, memory, and mission providers.
 4. Run `spark verify` before declaring the install launch-ready, and `spark verify --deep` before declaring memory wired.
 5. If the bot is quiet, run `spark fix telegram` before editing code.

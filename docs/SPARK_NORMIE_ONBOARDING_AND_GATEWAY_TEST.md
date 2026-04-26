@@ -2,17 +2,18 @@
 
 Last updated: 2026-04-24
 
-This is the launch-facing contract for a fresh Spark install. The user should not install five repos one by one. They should install Spark CLI, run setup once, paste a Telegram bot token and one LLM provider key, then have the starter ecosystem wired together.
+This is the launch-facing contract for a fresh Spark install. The user should not install Spark repos one by one. They should install Spark CLI, run setup once, paste a Telegram bot token and one LLM provider key, then have the starter ecosystem wired together.
 
 ## What The Default Install Brings
 
 `spark setup` defaults to the `telegram-starter` bundle:
 
 1. `spark-researcher`
-2. `spark-intelligence-builder`
-3. `domain-chip-memory`
-4. `spawner-ui`
-5. `spark-telegram-bot`
+2. `spark-character`
+3. `spark-intelligence-builder`
+4. `domain-chip-memory`
+5. `spawner-ui`
+6. `spark-telegram-bot`
 
 The CLI clones or discovers these modules, validates each `spark.toml`, checks capability conflicts, installs in dependency order, records the bundle, writes module env, stores declared secrets, and generates the local relay secret shared by Telegram and Spawner.
 
@@ -122,6 +123,7 @@ Cloud keys and the Telegram bot token are stored through the Spark secret backen
 - `SPARK_BUILDER_REPO`
 - `SPARK_BUILDER_HOME`
 - `SPARK_BUILDER_BRIDGE_MODE=required`
+- `SPARK_CHARACTER_ROOT`
 - `SPAWNER_UI_URL=http://127.0.0.1:5173`
 - `TELEGRAM_GATEWAY_MODE=polling`
 - `TELEGRAM_RELAY_SECRET`
@@ -138,6 +140,7 @@ Cloud keys and the Telegram bot token are stored through the Spark secret backen
 - non-secret LLM provider metadata
 - `SPARK_INTELLIGENCE_HOME`
 - `SPARK_RESEARCHER_ROOT`
+- `SPARK_CHARACTER_ROOT`
 - `SPARK_DOMAIN_CHIP_MEMORY_ROOT`
 - default memory initialized with `spark.memory.enabled=true`, `spark.memory.shadow_mode=false`, and `domain-chip-memory` active
 
@@ -193,7 +196,7 @@ SPARK_HOME="$(mktemp -d)" python -m spark_cli.cli setup \
 
 For local development, patch the registry to point at sibling local repos or run the unit test fixture. The smoke must verify:
 
-- five installed module records in starter order
+- installed module records in starter order
 - Telegram ingress owner is `spark-telegram-bot`
 - `TELEGRAM_GATEWAY_MODE=polling`
 - one shared `TELEGRAM_RELAY_SECRET` between Telegram and Spawner

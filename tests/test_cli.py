@@ -762,6 +762,7 @@ class SparkCliTests(unittest.TestCase):
     def test_expand_targets_expands_bundle_name(self) -> None:
         modules = {
             "spark-researcher": object(),
+            "spark-character": object(),
             "spark-telegram-bot": object(),
             "spark-intelligence-builder": object(),
             "domain-chip-memory": object(),
@@ -771,6 +772,7 @@ class SparkCliTests(unittest.TestCase):
             expand_targets("telegram-starter", modules, include_all=False),
             [
                 "spark-researcher",
+                "spark-character",
                 "spark-intelligence-builder",
                 "domain-chip-memory",
                 "spawner-ui",
@@ -873,6 +875,7 @@ class SparkCliTests(unittest.TestCase):
             resolve_bundle_names("telegram-starter"),
             [
                 "spark-researcher",
+                "spark-character",
                 "spark-intelligence-builder",
                 "domain-chip-memory",
                 "spawner-ui",
@@ -1285,7 +1288,7 @@ class SparkCliTests(unittest.TestCase):
             ["chat", "builder", "memory", "mission"],
         )
 
-    def test_setup_default_bundle_registers_five_module_starter_stack(self) -> None:
+    def test_setup_default_bundle_registers_starter_stack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
             fixture_root = tmp / "fixtures"
@@ -1296,6 +1299,13 @@ class SparkCliTests(unittest.TestCase):
                     "kind": "runtime",
                     "plane": "research",
                     "capabilities": ["spark.researcher", "spark.advisory", "spark.research.memory"],
+                    "needs_capabilities": [],
+                    "needs_secrets": [],
+                },
+                "spark-character": {
+                    "kind": "runtime",
+                    "plane": "identity",
+                    "capabilities": ["spark.character", "spark.persona"],
                     "needs_capabilities": [],
                     "needs_secrets": [],
                 },
@@ -1432,6 +1442,7 @@ class SparkCliTests(unittest.TestCase):
 
             expected = [
                 "spark-researcher",
+                "spark-character",
                 "spark-intelligence-builder",
                 "domain-chip-memory",
                 "spawner-ui",
@@ -1491,6 +1502,8 @@ class SparkCliTests(unittest.TestCase):
             self.assertNotIn("TELEGRAM_RELAY_SECRET=", gateway_env)
             self.assertIn(f"SPARK_INTELLIGENCE_HOME={expected_builder_home}", builder_env)
             self.assertIn(f"SPARK_RESEARCHER_ROOT={fixture_root / 'spark-researcher'}", builder_env)
+            self.assertIn(f"SPARK_CHARACTER_ROOT={fixture_root / 'spark-character'}", builder_env)
+            self.assertIn(f"SPARK_CHARACTER_ROOT={fixture_root / 'spark-character'}", gateway_env)
             self.assertIn(f"SPARK_DOMAIN_CHIP_MEMORY_ROOT={fixture_root / 'domain-chip-memory'}", builder_env)
             secrets_index = load_json(config_dir / "secrets_index.json", {})
             secrets_file = load_json(config_dir / "secrets.local.json", {})
@@ -1852,6 +1865,7 @@ class SparkCliTests(unittest.TestCase):
         builder = make_module("spark-intelligence-builder", ["spark.runtime"])
         spawner = make_module("spawner-ui", ["mission.execution"])
         researcher = make_module("spark-researcher", ["spark.researcher"])
+        character = make_module("spark-character", ["spark.character"])
         memory = make_module("domain-chip-memory", ["spark.memory.substrate"])
 
         class Args:
@@ -1865,6 +1879,7 @@ class SparkCliTests(unittest.TestCase):
                 builder.name: builder,
                 spawner.name: spawner,
                 researcher.name: researcher,
+                character.name: character,
                 memory.name: memory,
             },
             {
@@ -1880,6 +1895,8 @@ class SparkCliTests(unittest.TestCase):
         self.assertEqual(envs["spark-telegram-bot"]["SPARK_BUILDER_BRIDGE_MODE"], "required")
         self.assertEqual(envs["spark-intelligence-builder"]["SPARK_INTELLIGENCE_HOME"], str(REGISTRY_PATH.parent / "spark-intelligence"))
         self.assertEqual(envs["spark-intelligence-builder"]["SPARK_RESEARCHER_ROOT"], str(researcher.path))
+        self.assertEqual(envs["spark-intelligence-builder"]["SPARK_CHARACTER_ROOT"], str(character.path))
+        self.assertEqual(envs["spark-telegram-bot"]["SPARK_CHARACTER_ROOT"], str(character.path))
         self.assertEqual(envs["spark-intelligence-builder"]["SPARK_DOMAIN_CHIP_MEMORY_ROOT"], str(memory.path))
         self.assertEqual(
             envs["spark-telegram-bot"]["TELEGRAM_RELAY_SECRET"],
@@ -3676,6 +3693,7 @@ class SparkCliTests(unittest.TestCase):
     def test_collect_verify_payload_reports_launch_ready_stack(self) -> None:
         expected = [
             "spark-researcher",
+            "spark-character",
             "spark-intelligence-builder",
             "domain-chip-memory",
             "spawner-ui",
@@ -3724,6 +3742,7 @@ class SparkCliTests(unittest.TestCase):
                 return {
                     "SPARK_INTELLIGENCE_HOME": "C:/tmp/spark/state/spark-intelligence",
                     "SPARK_DOMAIN_CHIP_MEMORY_ROOT": "C:/tmp/spark/modules/domain-chip-memory",
+                    "SPARK_CHARACTER_ROOT": "C:/tmp/spark/modules/spark-character",
                     "SPARK_RESEARCHER_ROOT": "C:/tmp/spark/modules/spark-researcher",
                 }
             if Path(path).name == "spawner-ui.env":
@@ -3753,6 +3772,7 @@ class SparkCliTests(unittest.TestCase):
     def test_collect_verify_payload_deep_runs_builder_memory_direct_smoke(self) -> None:
         expected = [
             "spark-researcher",
+            "spark-character",
             "spark-intelligence-builder",
             "domain-chip-memory",
             "spawner-ui",
@@ -3806,6 +3826,7 @@ class SparkCliTests(unittest.TestCase):
                     return {
                         "SPARK_INTELLIGENCE_HOME": str(root / "state" / "spark-intelligence"),
                         "SPARK_DOMAIN_CHIP_MEMORY_ROOT": str(root / "modules" / "domain-chip-memory"),
+                        "SPARK_CHARACTER_ROOT": str(root / "modules" / "spark-character"),
                         "SPARK_RESEARCHER_ROOT": str(root / "modules" / "spark-researcher"),
                     }
                 if Path(path).name == "spawner-ui.env":
@@ -3839,7 +3860,7 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("--sdk-module", command)
 
     def test_collect_verify_payload_flags_missing_mission_provider_and_webhook(self) -> None:
-        expected = ["spark-researcher", "spark-intelligence-builder", "domain-chip-memory", "spawner-ui", "spark-telegram-bot"]
+        expected = ["spark-researcher", "spark-character", "spark-intelligence-builder", "domain-chip-memory", "spawner-ui", "spark-telegram-bot"]
         status_payload = {
             "ok": False,
             "modules": [{"name": name, "healthy": True} for name in expected],
@@ -3885,7 +3906,7 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("spawner-ui", checks["runtime_processes"]["detail"])
 
     def test_collect_verify_payload_accepts_legacy_spawner_bot_default_provider(self) -> None:
-        expected = ["spark-researcher", "spark-intelligence-builder", "domain-chip-memory", "spawner-ui", "spark-telegram-bot"]
+        expected = ["spark-researcher", "spark-character", "spark-intelligence-builder", "domain-chip-memory", "spawner-ui", "spark-telegram-bot"]
         status_payload = {
             "ok": True,
             "modules": [{"name": name, "healthy": True} for name in expected],
@@ -3927,6 +3948,7 @@ class SparkCliTests(unittest.TestCase):
                 return {
                     "SPARK_INTELLIGENCE_HOME": "C:/tmp/spark/state/spark-intelligence",
                     "SPARK_DOMAIN_CHIP_MEMORY_ROOT": "C:/tmp/spark/modules/domain-chip-memory",
+                    "SPARK_CHARACTER_ROOT": "C:/tmp/spark/modules/spark-character",
                     "SPARK_RESEARCHER_ROOT": "C:/tmp/spark/modules/spark-researcher",
                 }
             if Path(path).name == "spawner-ui.env":

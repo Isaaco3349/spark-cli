@@ -1334,6 +1334,7 @@ def build_module_envs(args: argparse.Namespace, modules_by_name: dict[str, Modul
     spawner = modules_by_name["spawner-ui"]
     builder = modules_by_name["spark-intelligence-builder"]
     researcher = modules_by_name.get("spark-researcher")
+    character = modules_by_name.get("spark-character")
     memory = modules_by_name.get("domain-chip-memory")
     builder_home = spark_builder_home()
     _, llm_env = build_llm_env(args, secret_values)
@@ -1350,6 +1351,8 @@ def build_module_envs(args: argparse.Namespace, modules_by_name: dict[str, Modul
         "TELEGRAM_GATEWAY_MODE": "polling",
         "TELEGRAM_RELAY_SECRET": relay_secret,
     }
+    if character is not None:
+        gateway_env["SPARK_CHARACTER_ROOT"] = str(character.path)
     gateway_env.update(llm_env)
 
     relay_base = args.spawner_ui_url or "http://127.0.0.1:5173"
@@ -1377,6 +1380,8 @@ def build_module_envs(args: argparse.Namespace, modules_by_name: dict[str, Modul
     }
     if researcher is not None:
         builder_env["SPARK_RESEARCHER_ROOT"] = str(researcher.path)
+    if character is not None:
+        builder_env["SPARK_CHARACTER_ROOT"] = str(character.path)
     if memory is not None:
         builder_env["SPARK_DOMAIN_CHIP_MEMORY_ROOT"] = str(memory.path)
 

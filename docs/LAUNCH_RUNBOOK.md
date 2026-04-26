@@ -78,7 +78,7 @@ spark secrets list
 Expected setup state:
 
 - bundle is `telegram-starter`
-- all five starter modules are installed
+- all starter modules are installed
 - `telegram.ingress` is owned by `spark-telegram-bot`
 - Telegram launch mode is long polling; no Telegram webhook env is generated
 - Telegram and Spawner share a generated relay secret

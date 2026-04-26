@@ -5,6 +5,11 @@
       "blessed": true,
       "summary": "Research, advisory, memory packet, and domain-chip authoring runtime for Spark"
     },
+    "spark-character": {
+      "source": "https://github.com/vibeforge1111/spark-character",
+      "blessed": true,
+      "summary": "Persona, voice consistency, scoring, and opt-in character evolution runtime for Spark"
+    },
     "spark-telegram-bot": {
       "source": "https://github.com/vibeforge1111/spark-telegram-bot",
       "blessed": true,
@@ -30,12 +35,13 @@
     "telegram-starter": {
       "modules": [
         "spark-researcher",
+        "spark-character",
         "spark-intelligence-builder",
         "domain-chip-memory",
         "spawner-ui",
         "spark-telegram-bot"
       ],
-      "summary": "Researcher + Builder runtime + default memory + Spawner execution plane + Telegram gateway"
+      "summary": "Researcher + character runtime + Builder runtime + default memory + Spawner execution plane + Telegram gateway"
     }
   }
 }
