@@ -82,6 +82,7 @@ from spark_cli.cli import (
     describe_install_risk,
     enforce_runtime_versions,
     ensure_trust_for_install,
+    extract_telegram_bot_token,
     INSTALL_PROGRESS_PATH,
     is_blessed_registry_entry,
     load_install_progress,
@@ -1100,6 +1101,21 @@ class SparkCliTests(unittest.TestCase):
         self.assertEqual(build_parser().parse_args(["stop", "spark-telegram-bot", "--profile", "qa-bot"]).profile, "qa-bot")
         self.assertEqual(build_parser().parse_args(["restart", "spark-telegram-bot", "--profile", "qa-bot"]).profile, "qa-bot")
         self.assertEqual(build_parser().parse_args(["logs", "spark-telegram-bot", "--profile", "qa-bot"]).profile, "qa-bot")
+
+    def test_telegram_connect_parser_defaults_to_secure_prompt(self) -> None:
+        args = build_parser().parse_args(["telegram", "connect", "spark-agi"])
+        self.assertEqual(args.profile, "spark-agi")
+        self.assertIsNone(args.token)
+        self.assertFalse(args.no_restart)
+
+    def test_extract_telegram_bot_token_accepts_botfather_message(self) -> None:
+        copied = "Done! Use this token to access the HTTP API:\n1234567890:ABC_def-1234567890abcdefABC_def123"
+        self.assertEqual(extract_telegram_bot_token(copied), "1234567890:ABC_def-1234567890abcdefABC_def123")
+
+    def test_extract_telegram_bot_token_rejects_ambiguous_clipboard_text(self) -> None:
+        copied = "111111:ABC_def-1234567890abcdefABC_def123 and 222222:ABC_def-1234567890abcdefABC_def123"
+        with self.assertRaises(SystemExit):
+            extract_telegram_bot_token(copied)
 
     def test_setup_accepts_role_specific_llm_providers(self) -> None:
         args = build_parser().parse_args(
