@@ -23,7 +23,7 @@
     },
     "spark-intelligence-builder": {
       "source": "https://github.com/vibeforge1111/spark-intelligence-builder",
-      "commit": "1fc760542733ecaa1098ca219b92da2d592bf362",
+      "commit": "64e0e7ddb6314e956932cb507090cfceae5b5cb1",
       "require_signed_commit": false,
       "blessed": true,
       "summary": "Spark runtime core for identity, memory, and routing"
@@ -37,7 +37,7 @@
     },
     "spawner-ui": {
       "source": "https://github.com/vibeforge1111/vibeship-spawner-ui",
-      "commit": "61b9be862494a7a0b3166ba22aaa5116b568e29d",
+      "commit": "3e159545ef5ed76137e14d3b839b2d0b347d8b86",
       "require_signed_commit": false,
       "blessed": true,
       "summary": "Execution plane and local dashboard for the Spark starter stack"
