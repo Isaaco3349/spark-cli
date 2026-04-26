@@ -420,6 +420,17 @@ EOF
   fi
 
   local spark_setup_cmd=("$SPARK_PREFIX/bin/spark" setup "$SPARK_BUNDLE")
+  local spark_secret_files=()
+  local spark_secret_ref_value=""
+  spark_secret_ref() {
+    local value="$1"
+    local secret_file
+    secret_file="$(mktemp "${TMPDIR:-/tmp}/spark-secret.XXXXXX")"
+    chmod 600 "$secret_file"
+    printf '%s' "$value" > "$secret_file"
+    spark_secret_files+=("$secret_file")
+    spark_secret_ref_value="@file:$secret_file"
+  }
   if [ "$SPARK_NON_INTERACTIVE_SETUP" = "1" ]; then
     spark_setup_cmd+=("--non-interactive")
   fi
@@ -430,7 +441,8 @@ EOF
     spark_setup_cmd+=("--skip-runtime-check")
   fi
   if [ -n "$SPARK_BOT_TOKEN" ]; then
-    spark_setup_cmd+=("--bot-token" "$SPARK_BOT_TOKEN")
+    spark_secret_ref "$SPARK_BOT_TOKEN"
+    spark_setup_cmd+=("--bot-token" "$spark_secret_ref_value")
   fi
   if [ -n "$SPARK_ADMIN_TELEGRAM_IDS" ]; then
     spark_setup_cmd+=("--admin-telegram-ids" "$SPARK_ADMIN_TELEGRAM_IDS")
@@ -439,16 +451,20 @@ EOF
     spark_setup_cmd+=("--llm-provider" "$SPARK_LLM_PROVIDER")
   fi
   if [ -n "$SPARK_ZAI_API_KEY" ]; then
-    spark_setup_cmd+=("--zai-api-key" "$SPARK_ZAI_API_KEY")
+    spark_secret_ref "$SPARK_ZAI_API_KEY"
+    spark_setup_cmd+=("--zai-api-key" "$spark_secret_ref_value")
   fi
   if [ -n "$SPARK_OPENAI_API_KEY" ]; then
-    spark_setup_cmd+=("--openai-api-key" "$SPARK_OPENAI_API_KEY")
+    spark_secret_ref "$SPARK_OPENAI_API_KEY"
+    spark_setup_cmd+=("--openai-api-key" "$spark_secret_ref_value")
   fi
   if [ -n "$SPARK_ANTHROPIC_API_KEY" ]; then
-    spark_setup_cmd+=("--anthropic-api-key" "$SPARK_ANTHROPIC_API_KEY")
+    spark_secret_ref "$SPARK_ANTHROPIC_API_KEY"
+    spark_setup_cmd+=("--anthropic-api-key" "$spark_secret_ref_value")
   fi
   if [ -n "$SPARK_MINIMAX_API_KEY" ]; then
-    spark_setup_cmd+=("--minimax-api-key" "$SPARK_MINIMAX_API_KEY")
+    spark_secret_ref "$SPARK_MINIMAX_API_KEY"
+    spark_setup_cmd+=("--minimax-api-key" "$spark_secret_ref_value")
   fi
   if [ -n "$SPARK_SETUP_ARGS" ]; then
     # shellcheck disable=SC2206
@@ -459,7 +475,12 @@ EOF
     spark_setup_cmd+=("${extra_setup_args[@]}")
   fi
   log "Running spark setup $SPARK_BUNDLE"
-  "${spark_setup_cmd[@]}"
+  local setup_exit=0
+  "${spark_setup_cmd[@]}" || setup_exit=$?
+  if [ "${#spark_secret_files[@]}" -gt 0 ]; then
+    rm -f "${spark_secret_files[@]}"
+  fi
+  return "$setup_exit"
 }
 
 run_autostart() {

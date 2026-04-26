@@ -267,22 +267,36 @@ function Run-Setup {
         Copy-Item -LiteralPath $LocalRegistry -Destination (Join-Path $CliDir "registry.json") -Force
     }
     $sparkCmd = Join-Path $Script:SparkPrefix "bin\spark.cmd"
+    $secretFiles = [System.Collections.Generic.List[string]]::new()
+    function New-SetupSecretRef {
+        param([string]$Value)
+        $secretFile = [System.IO.Path]::GetTempFileName()
+        [System.IO.File]::WriteAllText($secretFile, $Value, [System.Text.UTF8Encoding]::new($false))
+        [void]$secretFiles.Add($secretFile)
+        return "@file:$secretFile"
+    }
     $setupArgs = @()
     if ($NonInteractiveSetup) { $setupArgs += "--non-interactive" }
     if ($SetupSkipInstallCommands) { $setupArgs += "--skip-install-commands" }
     if ($SetupSkipRuntimeCheck) { $setupArgs += "--skip-runtime-check" }
-    if ($BotToken) { $setupArgs += @("--bot-token", $BotToken) }
+    if ($BotToken) { $setupArgs += @("--bot-token", (New-SetupSecretRef $BotToken)) }
     if ($AdminTelegramIds) { $setupArgs += @("--admin-telegram-ids", $AdminTelegramIds) }
     if ($LlmProvider) { $setupArgs += @("--llm-provider", $LlmProvider) }
-    if ($ZaiApiKey) { $setupArgs += @("--zai-api-key", $ZaiApiKey) }
-    if ($OpenAIApiKey) { $setupArgs += @("--openai-api-key", $OpenAIApiKey) }
-    if ($AnthropicApiKey) { $setupArgs += @("--anthropic-api-key", $AnthropicApiKey) }
-    if ($MiniMaxApiKey) { $setupArgs += @("--minimax-api-key", $MiniMaxApiKey) }
+    if ($ZaiApiKey) { $setupArgs += @("--zai-api-key", (New-SetupSecretRef $ZaiApiKey)) }
+    if ($OpenAIApiKey) { $setupArgs += @("--openai-api-key", (New-SetupSecretRef $OpenAIApiKey)) }
+    if ($AnthropicApiKey) { $setupArgs += @("--anthropic-api-key", (New-SetupSecretRef $AnthropicApiKey)) }
+    if ($MiniMaxApiKey) { $setupArgs += @("--minimax-api-key", (New-SetupSecretRef $MiniMaxApiKey)) }
     $setupArgs += $SetupArg
     Write-SparkLog "Running spark setup $Bundle"
-    & $sparkCmd setup $Bundle @setupArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "spark setup failed with exit code $LASTEXITCODE"
+    try {
+        & $sparkCmd setup $Bundle @setupArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "spark setup failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        foreach ($secretFile in $secretFiles) {
+            Remove-Item -LiteralPath $secretFile -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 

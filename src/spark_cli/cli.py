@@ -621,7 +621,7 @@ def read_clipboard_text() -> str:
                 return value
     raise SystemExit(
         "Could not read a secret from the system clipboard. Copy the value first, then use `@clipboard`, "
-        "use `@env:NAME`, or pass the value directly."
+        "use `@env:NAME`, `@file:/path/to/secret`, or pass the value directly."
     )
 
 
@@ -637,6 +637,14 @@ def resolve_secret_input(value: str) -> str:
         if not env_value:
             raise SystemExit(f"Environment variable {env_name} is not set or is empty.")
         return env_value
+    if stripped.lower().startswith("@file:"):
+        secret_path = stripped[6:].strip()
+        if not secret_path:
+            raise SystemExit("Invalid secret reference: @file: requires a path.")
+        try:
+            return Path(secret_path).expanduser().read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise SystemExit(f"Could not read secret file {secret_path}: {exc}") from exc
     return value
 
 
@@ -5526,8 +5534,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip interactive preflight and secret prompts (require --secret for every required secret).",
     )
-    setup_parser.add_argument("--secret", action="append", help="Provide manifest secret values as key=value; use @clipboard or @env:NAME for secret input")
-    setup_parser.add_argument("--bot-token", help="Telegram BotFather token, @clipboard, or @env:NAME")
+    setup_parser.add_argument("--secret", action="append", help="Provide manifest secret values as key=value; use @clipboard, @env:NAME, or @file:path for secret input")
+    setup_parser.add_argument("--bot-token", help="Telegram BotFather token, @clipboard, @env:NAME, or @file:path")
     setup_parser.add_argument("--admin-telegram-ids")
     setup_parser.add_argument("--telegram-relay-secret")
     setup_parser.add_argument("--telegram-relay-port", type=int, help="Local Telegram mission relay port for a named profile")
@@ -5542,16 +5550,16 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--builder-llm-provider", choices=LLM_PROVIDER_CHOICES, help="Provider for Builder reasoning and orchestration")
     setup_parser.add_argument("--memory-llm-provider", choices=LLM_PROVIDER_CHOICES, help="Provider for memory synthesis and recall")
     setup_parser.add_argument("--mission-llm-provider", choices=LLM_PROVIDER_CHOICES, help="Provider for Spawner missions and coding/build work")
-    setup_parser.add_argument("--zai-api-key", help="Z.AI / GLM coding endpoint API key, @clipboard, or @env:NAME")
+    setup_parser.add_argument("--zai-api-key", help="Z.AI / GLM coding endpoint API key, @clipboard, @env:NAME, or @file:path")
     setup_parser.add_argument("--zai-base-url", default="https://api.z.ai/api/coding/paas/v4/")
     setup_parser.add_argument("--zai-model", default="glm-5.1")
-    setup_parser.add_argument("--openai-api-key", help="OpenAI API key, @clipboard, or @env:NAME")
+    setup_parser.add_argument("--openai-api-key", help="OpenAI API key, @clipboard, @env:NAME, or @file:path")
     setup_parser.add_argument("--openai-base-url", default="https://api.openai.com/v1")
     setup_parser.add_argument("--openai-model", default="gpt-5.5")
-    setup_parser.add_argument("--anthropic-api-key", help="Anthropic API key, @clipboard, or @env:NAME")
+    setup_parser.add_argument("--anthropic-api-key", help="Anthropic API key, @clipboard, @env:NAME, or @file:path")
     setup_parser.add_argument("--anthropic-base-url", default="https://api.anthropic.com")
     setup_parser.add_argument("--anthropic-model", default="claude-sonnet-4.5")
-    setup_parser.add_argument("--minimax-api-key", help="MiniMax API key, @clipboard, or @env:NAME")
+    setup_parser.add_argument("--minimax-api-key", help="MiniMax API key, @clipboard, @env:NAME, or @file:path")
     setup_parser.add_argument("--minimax-base-url", default="https://api.minimax.io/v1")
     setup_parser.add_argument("--minimax-model", default="MiniMax-M2.7")
     setup_parser.add_argument("--ollama-url", default="http://localhost:11434")

@@ -278,6 +278,15 @@ class SparkCliTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             resolve_secret_input("@env:SPARK_TEST_SECRET_MISSING")
 
+    def test_resolve_secret_input_can_read_file_reference(self) -> None:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            handle.write("secret-from-file\n")
+            secret_path = Path(handle.name)
+        try:
+            self.assertEqual(resolve_secret_input(f"@file:{secret_path}"), "secret-from-file")
+        finally:
+            secret_path.unlink(missing_ok=True)
+
     def test_profile_runtime_env_overlays_profile_token_and_env(self) -> None:
         bot = make_module("spark-telegram-bot", ["telegram.ingress"], ["telegram.bot_token", "telegram.relay_secret"])
 
@@ -4542,7 +4551,7 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn('"$SPARK_PREFIX/bin/spark" setup "$SPARK_BUNDLE"', script)
         self.assertIn('"$SPARK_PREFIX/bin/spark" autostart install "$SPARK_BUNDLE" --now', script)
         self.assertIn('local spark_setup_cmd=("$SPARK_PREFIX/bin/spark" setup "$SPARK_BUNDLE")', script)
-        self.assertIn('spark_setup_cmd+=("--bot-token" "$SPARK_BOT_TOKEN")', script)
+        self.assertIn('spark_setup_cmd+=("--bot-token" "$spark_secret_ref_value")', script)
         self.assertIn('spark_setup_cmd+=("--admin-telegram-ids" "$SPARK_ADMIN_TELEGRAM_IDS")', script)
         self.assertIn('spark_setup_cmd+=("--llm-provider" "$SPARK_LLM_PROVIDER")', script)
         self.assertNotIn('"${setup_words[@]}" "${extra_setup_args[@]}"', script)
@@ -4553,7 +4562,7 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("$SPARK_PREFIX/bin/spark providers status", script)
         self.assertIn("$SPARK_PREFIX/bin/spark verify --onboarding", script)
         self.assertIn("$SPARK_PREFIX/bin/spark fix telegram", script)
-        self.assertIn('spark_setup_cmd+=("--minimax-api-key" "$SPARK_MINIMAX_API_KEY")', script)
+        self.assertIn('spark_setup_cmd+=("--minimax-api-key" "$spark_secret_ref_value")', script)
         self.assertIn("spark_cli.cli", script)
 
     def test_windows_install_script_bootstraps_local_prefix_contract(self) -> None:
@@ -4581,10 +4590,10 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("[switch]$AllowDevSource", script)
         self.assertIn("Test-InstallSettings", script)
         self.assertIn("Refusing non-canonical Spark CLI source", script)
-        self.assertIn('if ($BotToken) { $setupArgs += @("--bot-token", $BotToken) }', script)
+        self.assertIn('if ($BotToken) { $setupArgs += @("--bot-token", (New-SetupSecretRef $BotToken)) }', script)
         self.assertIn('if ($AdminTelegramIds) { $setupArgs += @("--admin-telegram-ids", $AdminTelegramIds) }', script)
         self.assertIn('if ($LlmProvider) { $setupArgs += @("--llm-provider", $LlmProvider) }', script)
-        self.assertIn('if ($MiniMaxApiKey) { $setupArgs += @("--minimax-api-key", $MiniMaxApiKey) }', script)
+        self.assertIn('if ($MiniMaxApiKey) { $setupArgs += @("--minimax-api-key", (New-SetupSecretRef $MiniMaxApiKey)) }', script)
         self.assertIn("& $sparkCmd setup $Bundle @setupArgs", script)
         self.assertIn("[switch]$NoAutostart", script)
         self.assertIn("& $sparkCmd autostart install $Bundle --now", script)
