@@ -18,6 +18,7 @@ SPARK_LLM_PROVIDER="${SPARK_LLM_PROVIDER:-}"
 SPARK_ZAI_API_KEY="${SPARK_ZAI_API_KEY:-}"
 SPARK_OPENAI_API_KEY="${SPARK_OPENAI_API_KEY:-}"
 SPARK_ANTHROPIC_API_KEY="${SPARK_ANTHROPIC_API_KEY:-}"
+SPARK_MINIMAX_API_KEY="${SPARK_MINIMAX_API_KEY:-}"
 SPARK_NON_INTERACTIVE_SETUP="${SPARK_NON_INTERACTIVE_SETUP:-0}"
 SPARK_SETUP_SKIP_INSTALL_COMMANDS="${SPARK_SETUP_SKIP_INSTALL_COMMANDS:-0}"
 SPARK_SETUP_SKIP_RUNTIME_CHECK="${SPARK_SETUP_SKIP_RUNTIME_CHECK:-0}"
@@ -41,10 +42,11 @@ Options:
   --bundle NAME             Bundle for setup (default: telegram-starter)
   --bot-token TOKEN         Telegram BotFather token passed to setup
   --admin-telegram-ids IDS  Comma-separated Telegram admin IDs passed to setup
-  --llm-provider PROVIDER   Provider passed to setup: openai, codex, anthropic, zai, or ollama
+  --llm-provider PROVIDER   Provider passed to setup: openai, codex, anthropic, zai, minimax, or ollama
   --zai-api-key KEY         Z.AI / GLM API key passed to setup
   --openai-api-key KEY      OpenAI API key passed to setup
   --anthropic-api-key KEY   Anthropic API key passed to setup
+  --minimax-api-key KEY     MiniMax API key passed to setup
   --non-interactive-setup   Pass --non-interactive to setup
   --setup-skip-install-commands
                             Pass --skip-install-commands to setup
@@ -64,6 +66,7 @@ Environment mirrors these flags:
   SPARK_AUTOSTART, SPARK_ALLOW_DEV_SOURCE, SPARK_MANAGED_NODE,
   SPARK_BOT_TOKEN, SPARK_ADMIN_TELEGRAM_IDS, SPARK_LLM_PROVIDER,
   SPARK_ZAI_API_KEY, SPARK_OPENAI_API_KEY, SPARK_ANTHROPIC_API_KEY,
+  SPARK_MINIMAX_API_KEY,
   SPARK_NON_INTERACTIVE_SETUP, SPARK_SETUP_SKIP_INSTALL_COMMANDS,
   SPARK_SETUP_SKIP_RUNTIME_CHECK, SPARK_SHELL_PROFILE,
   SPARK_NODE_PLATFORM.
@@ -97,6 +100,8 @@ while [ "$#" -gt 0 ]; do
       SPARK_OPENAI_API_KEY="$2"; shift 2 ;;
     --anthropic-api-key)
       SPARK_ANTHROPIC_API_KEY="$2"; shift 2 ;;
+    --minimax-api-key)
+      SPARK_MINIMAX_API_KEY="$2"; shift 2 ;;
     --non-interactive-setup)
       SPARK_NON_INTERACTIVE_SETUP=1; shift ;;
     --setup-skip-install-commands)
@@ -442,6 +447,9 @@ EOF
   if [ -n "$SPARK_ANTHROPIC_API_KEY" ]; then
     spark_setup_cmd+=("--anthropic-api-key" "$SPARK_ANTHROPIC_API_KEY")
   fi
+  if [ -n "$SPARK_MINIMAX_API_KEY" ]; then
+    spark_setup_cmd+=("--minimax-api-key" "$SPARK_MINIMAX_API_KEY")
+  fi
   if [ -n "$SPARK_SETUP_ARGS" ]; then
     # shellcheck disable=SC2206
     local setup_words=($SPARK_SETUP_ARGS)
@@ -517,8 +525,15 @@ For default installs, the installer also adds this line to your shell profile:
 Operational checks:
   $SPARK_PREFIX/bin/spark status
   $SPARK_PREFIX/bin/spark providers status
-  $SPARK_PREFIX/bin/spark verify
+  $SPARK_PREFIX/bin/spark verify --onboarding
   $SPARK_PREFIX/bin/spark autostart status
+
+Finish in Telegram:
+  1. Open your Spark bot and send /start
+  2. Pick an access level when Spark asks. Most people should use /access 3
+  3. Send /diagnose
+  4. Try memory: /remember I like concise warm replies
+  5. Try a tiny build: /run say exactly OK
 
 If Telegram is quiet or memory is not responding:
   $SPARK_PREFIX/bin/spark fix telegram

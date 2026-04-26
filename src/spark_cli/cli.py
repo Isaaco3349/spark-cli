@@ -2642,18 +2642,19 @@ def print_setup_next_steps(bundle_name: str, ingress_owner: Module, llm_state: d
     model = llm_state.get("model") or "not configured"
     roles = llm_state.get("roles") if isinstance(llm_state.get("roles"), dict) else {}
     print("")
-    print("Spark is installed. Next steps:")
-    print("  1. Verify the install:")
-    print("     spark status")
-    print("  2. Make Spark start when this computer logs in:")
+    print("Spark is installed. Your first run:")
+    print("  1. Make sure Spark is running now and after login:")
     print("     spark autostart install --now")
-    print("  3. Manual start fallback:")
+    print("  2. Open Telegram and send /start to your Spark bot.")
+    print("  3. Pick an access level in Telegram when Spark asks.")
+    print("     Most people should choose /access 3.")
+    print("  4. Send /diagnose in Telegram.")
+    print("  5. Run the onboarding check here:")
+    print("     spark verify --onboarding")
+    print("  6. Send a normal Telegram message and confirm Spark replies.")
+    print("")
+    print("Manual start fallback:")
     print("     spark start telegram-starter")
-    print("  4. Open your Telegram bot and send:")
-    print("     /start")
-    print("     /myid")
-    print("     /diagnose")
-    print("  5. Send a normal message and confirm the LLM responds.")
     print("")
     if provider == "not_configured":
         print("LLM provider: not configured yet")
@@ -2673,7 +2674,7 @@ def print_setup_next_steps(bundle_name: str, ingress_owner: Module, llm_state: d
     print("OpenAI can use a signed-in Codex/ChatGPT session (`codex`) or OPENAI_API_KEY; Anthropic can use Claude Code (`claude`) or ANTHROPIC_API_KEY.")
     print("For role-level control, use --chat-llm-provider, --builder-llm-provider, --memory-llm-provider, and --mission-llm-provider.")
     print("Need to turn the agent off? Run `spark stop telegram-starter` or `spark autostart uninstall`.")
-    print("Run `spark guide` anytime for BotFather, LLM, module, and Telegram command help.")
+    print("Run `spark guide` anytime for BotFather, LLM, access levels, module, and Telegram command help.")
 
 
 def resolve_setup_bundle_plan(args: argparse.Namespace) -> SetupBundlePlan:
@@ -3199,6 +3200,7 @@ def collect_telegram_fix_payload() -> dict[str, Any]:
         "status_repair_hints": status_payload.get("repair_hints", []),
         "next_commands": [
             "spark status",
+            "spark verify --onboarding",
             "spark verify --deep",
             "spark restart telegram-starter",
             "spark logs spark-telegram-bot --lines 80",
@@ -3665,6 +3667,7 @@ def collect_verify_payload(*, deep: bool = False) -> dict[str, Any]:
         "next_commands": [
             "spark status",
             "spark providers status",
+            "spark verify --onboarding",
             "spark verify --deep",
             "spark fix telegram",
             "spark start telegram-starter",
@@ -3674,8 +3677,23 @@ def collect_verify_payload(*, deep: bool = False) -> dict[str, Any]:
     }
 
 
+def onboarding_checklist() -> list[str]:
+    return [
+        "Open Telegram and send /start to your Spark bot.",
+        "Choose an access level when Spark asks; /access 3 is recommended for most users.",
+        "Send /diagnose in Telegram and confirm Telegram, LLM, memory, and Spawner look OK.",
+        "Send /remember I like concise warm replies, then /recall concise warm replies.",
+        "Try a tiny build with /run say exactly OK, then check /board.",
+        "If anything is quiet or confusing, run spark fix telegram.",
+    ]
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
-    payload = collect_verify_payload(deep=getattr(args, "deep", False))
+    onboarding = bool(getattr(args, "onboarding", False))
+    payload = collect_verify_payload(deep=bool(getattr(args, "deep", False) or onboarding))
+    if onboarding:
+        payload["summary"] = "Spark onboarding verification"
+        payload["onboarding_checklist"] = onboarding_checklist()
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0 if payload["ok"] else 1
@@ -3696,6 +3714,11 @@ def cmd_verify(args: argparse.Namespace) -> int:
     print("Useful commands:")
     for command in payload["next_commands"]:
         print(f"  {command}")
+    if onboarding:
+        print("")
+        print("Finish onboarding in Telegram:")
+        for index, item in enumerate(onboarding_checklist(), start=1):
+            print(f"  {index}. {item}")
     return 0 if payload["ok"] else 1
 
 
@@ -5266,9 +5289,11 @@ def onboarding_guide_payload() -> dict[str, Any]:
             "llm_auth_note": "The easiest path is `spark setup` and the guided picker. OpenAI can use a signed-in Codex CLI / ChatGPT session or OPENAI_API_KEY. Anthropic can use Claude Code or ANTHROPIC_API_KEY. Z.AI and MiniMax use API keys. Ollama is local. If your default chat LLM is not a local executor, Spark uses Codex or Claude for mission/build execution when available.",
         },
         "start": [
-            "spark status",
             "spark autostart install --now",
-            "spark start telegram-starter",
+            "Open Telegram and send /start to your Spark bot.",
+            "Choose /access 3 when Spark asks, unless you want less or more access.",
+            "Send /diagnose in Telegram.",
+            "spark verify --onboarding",
         ],
         "multi_bot_profiles": [
             "Use named profiles when you want one or more Telegram bots on the same Spark install.",
@@ -5298,6 +5323,7 @@ def onboarding_guide_payload() -> dict[str, Any]:
         "operator_commands": [
             { "command": "spark status", "use": "Human-readable health check and repair hints." },
             { "command": "spark verify", "use": "Launch-readiness proof for modules, LLM roles, Telegram long polling, Builder memory, Spawner relay, and running processes." },
+            { "command": "spark verify --onboarding", "use": "First-user checklist for Telegram, access level, memory, and a tiny Spawner mission." },
             { "command": "spark fix telegram", "use": "Targeted quiet-bot repair checklist: token, admin ids, Builder bridge, LLM roles, process, and logs." },
             { "command": "spark doctor --json", "use": "Structured diagnostics for agents and support." },
             { "command": "spark autostart install --now", "use": "Turn on the Telegram agent now and every time this computer logs in." },
@@ -5314,7 +5340,7 @@ def onboarding_guide_payload() -> dict[str, Any]:
             "Bot is quiet and you are not sure why: run spark fix telegram.",
             "Bot says admin only: send /myid, add that numeric id during spark setup, then restart.",
             "LLM does not answer: rerun spark setup with providers for chat, builder, memory, and mission, then run spark status.",
-            "Fresh install feels incomplete: run spark verify and follow the first [FIX] line.",
+            "Fresh install feels incomplete: run spark verify --onboarding and follow the first [FIX] line.",
             "/run fails: start spawner-ui and check spark logs spawner-ui.",
             "Memory does not work: run spark status and repair Builder/domain-chip-memory hints first.",
         ],
@@ -5454,6 +5480,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser = subparsers.add_parser("verify", help="Verify launch-critical Spark wiring end to end")
     verify_parser.add_argument("--json", action="store_true")
     verify_parser.add_argument("--deep", action="store_true", help="Run live write/read memory smoke checks in addition to static wiring checks")
+    verify_parser.add_argument("--onboarding", action="store_true", help="Run first-user onboarding checks and print the Telegram finish checklist")
     verify_parser.set_defaults(func=cmd_verify)
 
     fix_parser = subparsers.add_parser("fix", help="Run targeted repair guidance for common Spark issues")

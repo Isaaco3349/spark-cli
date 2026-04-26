@@ -10,6 +10,7 @@ param(
     [string]$ZaiApiKey = "",
     [string]$OpenAIApiKey = "",
     [string]$AnthropicApiKey = "",
+    [string]$MiniMaxApiKey = "",
     [switch]$NonInteractiveSetup,
     [switch]$SetupSkipInstallCommands,
     [switch]$SetupSkipRuntimeCheck,
@@ -276,6 +277,7 @@ function Run-Setup {
     if ($ZaiApiKey) { $setupArgs += @("--zai-api-key", $ZaiApiKey) }
     if ($OpenAIApiKey) { $setupArgs += @("--openai-api-key", $OpenAIApiKey) }
     if ($AnthropicApiKey) { $setupArgs += @("--anthropic-api-key", $AnthropicApiKey) }
+    if ($MiniMaxApiKey) { $setupArgs += @("--minimax-api-key", $MiniMaxApiKey) }
     $setupArgs += $SetupArg
     Write-SparkLog "Running spark setup $Bundle"
     & $sparkCmd setup $Bundle @setupArgs
@@ -341,8 +343,15 @@ Write-Host ""
 Write-Host "Operational checks:"
 Write-Host "  spark status"
 Write-Host "  spark providers status"
-Write-Host "  spark verify"
+Write-Host "  spark verify --onboarding"
 Write-Host "  spark autostart status"
+Write-Host ""
+Write-Host "Finish in Telegram:"
+Write-Host "  1. Open your Spark bot and send /start"
+Write-Host "  2. Pick an access level when Spark asks. Most people should use /access 3"
+Write-Host "  3. Send /diagnose"
+Write-Host "  4. Try memory: /remember I like concise warm replies"
+Write-Host "  5. Try a tiny build: /run say exactly OK"
 Write-Host ""
 Write-Host "If Telegram is quiet or memory is not responding:"
 Write-Host "  spark fix telegram"

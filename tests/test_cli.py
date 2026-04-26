@@ -1405,7 +1405,8 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("--chat-llm-provider openai", output)
         self.assertIn("signed-in Codex CLI", output)
         self.assertIn("spark autostart install --now", output)
-        self.assertIn("spark start telegram-starter", output)
+        self.assertIn("spark verify --onboarding", output)
+        self.assertIn("Choose /access 3", output)
         self.assertIn("Optional: run another Telegram bot", output)
         self.assertIn("spark start spark-telegram-bot --profile qa-bot", output)
         self.assertIn("Choose Spark access level", output)
@@ -1577,9 +1578,11 @@ class SparkCliTests(unittest.TestCase):
                  patch("sys.stdout", new_callable=StringIO) as stdout:
                 self.assertEqual(cmd_setup(args), 0)
             setup_output = stdout.getvalue()
-            self.assertIn("Next steps:", setup_output)
-            self.assertIn("spark status", setup_output)
+            self.assertIn("Spark is installed. Your first run:", setup_output)
             self.assertIn("spark autostart install --now", setup_output)
+            self.assertIn("Pick an access level", setup_output)
+            self.assertIn("/access 3", setup_output)
+            self.assertIn("spark verify --onboarding", setup_output)
             self.assertIn("spark start telegram-starter", setup_output)
             self.assertIn("/diagnose", setup_output)
             self.assertIn("Need a bot token? Open @BotFather", setup_output)
@@ -4012,6 +4015,7 @@ class SparkCliTests(unittest.TestCase):
         self.assertFalse(checks["builder_memory_roots"]["ok"])
         self.assertFalse(checks["llm_roles"]["ok"])
         self.assertFalse(checks["telegram_process"]["ok"])
+        self.assertIn("spark verify --onboarding", payload["next_commands"])
         self.assertIn("spark verify --deep", payload["next_commands"])
         self.assertIn("spark restart telegram-starter", payload["next_commands"])
 
@@ -4234,6 +4238,27 @@ class SparkCliTests(unittest.TestCase):
         self.assertTrue(checks["spawner_mission_relay"]["ok"])
         self.assertTrue(checks["runtime_processes"]["ok"])
         self.assertIn("spark-telegram-bot:spark-agi", checks["runtime_processes"]["detail"])
+
+    def test_verify_onboarding_prints_first_run_checklist(self) -> None:
+        args = build_parser().parse_args(["verify", "--onboarding"])
+        payload = {
+            "ok": True,
+            "summary": "Spark launch verification",
+            "bundle": "telegram-starter",
+            "checks": [{"name": "starter_bundle", "ok": True, "detail": "ready"}],
+            "next_commands": ["spark status", "spark verify --onboarding"],
+            "status_repair_hints": [],
+        }
+        with patch("spark_cli.cli.collect_verify_payload", return_value=payload) as collect_mock, \
+             patch("sys.stdout", new_callable=StringIO) as stdout:
+            self.assertEqual(args.func(args), 0)
+        collect_mock.assert_called_once_with(deep=True)
+        output = stdout.getvalue()
+        self.assertIn("Spark onboarding verification", output)
+        self.assertIn("Finish onboarding in Telegram", output)
+        self.assertIn("Open Telegram and send /start", output)
+        self.assertIn("/access 3 is recommended", output)
+        self.assertIn("/run say exactly OK", output)
 
     def test_collect_verify_payload_deep_runs_builder_memory_direct_smoke(self) -> None:
         expected = [
@@ -4505,8 +4530,9 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn('source "$SPARK_PREFIX/env"', script)
         self.assertIn("$SPARK_PREFIX/bin/spark providers list", script)
         self.assertIn("$SPARK_PREFIX/bin/spark providers status", script)
-        self.assertIn("$SPARK_PREFIX/bin/spark verify", script)
+        self.assertIn("$SPARK_PREFIX/bin/spark verify --onboarding", script)
         self.assertIn("$SPARK_PREFIX/bin/spark fix telegram", script)
+        self.assertIn('spark_setup_cmd+=("--minimax-api-key" "$SPARK_MINIMAX_API_KEY")', script)
         self.assertIn("spark_cli.cli", script)
 
     def test_windows_install_script_bootstraps_local_prefix_contract(self) -> None:
@@ -4537,12 +4563,13 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn('if ($BotToken) { $setupArgs += @("--bot-token", $BotToken) }', script)
         self.assertIn('if ($AdminTelegramIds) { $setupArgs += @("--admin-telegram-ids", $AdminTelegramIds) }', script)
         self.assertIn('if ($LlmProvider) { $setupArgs += @("--llm-provider", $LlmProvider) }', script)
+        self.assertIn('if ($MiniMaxApiKey) { $setupArgs += @("--minimax-api-key", $MiniMaxApiKey) }', script)
         self.assertIn("& $sparkCmd setup $Bundle @setupArgs", script)
         self.assertIn("[switch]$NoAutostart", script)
         self.assertIn("& $sparkCmd autostart install $Bundle --now", script)
         self.assertIn("spark providers list", script)
         self.assertIn("spark providers status", script)
-        self.assertIn("spark verify", script)
+        self.assertIn("spark verify --onboarding", script)
         self.assertIn("spark fix telegram", script)
 
     def test_readme_does_not_recommend_piping_remote_installers_to_shell(self) -> None:
