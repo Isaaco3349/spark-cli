@@ -3830,9 +3830,11 @@ def cmd_start(args: argparse.Namespace) -> int:
     exit_code = 0
     profile = normalize_telegram_profile(getattr(args, "profile", None))
     target_modules = resolve_start_modules(args.target, modules)
+    requested_names = set(expand_targets(args.target, modules, include_all=True))
     for module in target_modules:
         if not module.run_command:
-            print(f"Skipping {module.name}: no run.default command declared")
+            if module.name in requested_names:
+                print(f"Skipping {module.name}: no run.default command declared")
             continue
         module_profile = profile if module.name == "spark-telegram-bot" else DEFAULT_TELEGRAM_PROFILE
         if not start_module(
@@ -3946,12 +3948,48 @@ def shell_join(args: list[str]) -> str:
     return " ".join(shlex.quote(str(arg)) for arg in args)
 
 
-def autostart_shell_command(action: str, target: str) -> str:
+def autostart_telegram_profiles() -> list[str]:
+    setup_state = load_json(CONFIG_PATH, {})
+    profiles = setup_state.get("telegram_profiles") if isinstance(setup_state, dict) else None
+    if not isinstance(profiles, dict):
+        return []
+    return sorted(
+        normalize_telegram_profile(profile)
+        for profile, profile_state in profiles.items()
+        if isinstance(profile_state, dict)
+    )
+
+
+def autostart_should_include_telegram_profiles(target: str) -> bool:
+    return target in {"telegram-starter", "spark-telegram-bot"}
+
+
+def spark_action_shell_command(action: str, target: str, *, profile: str | None = None) -> str:
     args = spark_invocation_args() + [action]
     if action == "start":
         args.append("--allow-boot-warnings")
+    if profile and normalize_telegram_profile(profile) != DEFAULT_TELEGRAM_PROFILE:
+        args.extend(["--profile", normalize_telegram_profile(profile)])
     args.append(target)
     return shell_join(args)
+
+
+def autostart_shell_commands(action: str, target: str) -> list[str]:
+    base_command = spark_action_shell_command(action, target)
+    if not autostart_should_include_telegram_profiles(target):
+        return [base_command]
+
+    profile_commands = [
+        spark_action_shell_command(action, "spark-telegram-bot", profile=profile)
+        for profile in autostart_telegram_profiles()
+    ]
+    if action == "stop":
+        return profile_commands + [base_command]
+    return [base_command] + profile_commands
+
+
+def autostart_shell_command(action: str, target: str) -> str:
+    return " && ".join(autostart_shell_commands(action, target))
 
 
 def render_systemd_autostart_unit(*, target: str, start_command: str, stop_command: str) -> str:
@@ -4047,6 +4085,10 @@ def write_windows_startup_script(path: Path, start_command: str) -> None:
     )
 
 
+def windows_cmd_c(command: str) -> str:
+    return "cmd.exe /c " + subprocess.list2cmdline([command])
+
+
 def run_autostart_helper(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, check=False, capture_output=True, text=True)
 
@@ -4131,7 +4173,7 @@ def cmd_autostart_install(args: argparse.Namespace) -> int:
         return 1 if failures else 0
 
     if sys.platform == "win32":
-        task_command = start_command
+        task_command = windows_cmd_c(start_command)
         command = [
             "schtasks",
             "/Create",
@@ -4150,7 +4192,7 @@ def cmd_autostart_install(args: argparse.Namespace) -> int:
             write_windows_startup_script(startup_path, start_command)
             print(f"Installed Windows Startup fallback: {startup_path}")
             if args.now:
-                now_command = spark_invocation_args() + ["start", "--allow-boot-warnings", target]
+                now_command = ["cmd", "/c", start_command]
                 result = run_autostart_helper(now_command)
                 if result.returncode != 0:
                     print_helper_failure(now_command, result)
@@ -4223,11 +4265,14 @@ def cmd_autostart_uninstall(_: argparse.Namespace) -> int:
 
 
 def cmd_autostart_status(_: argparse.Namespace) -> int:
+    profiles = autostart_telegram_profiles()
+    profile_text = ", ".join(profiles) if profiles else "none"
     if sys.platform.startswith("linux"):
         scope = linux_autostart_scope()
         service_path = linux_autostart_path(scope)
         print(f"Linux systemd {scope} service: {service_path}")
         print("Installed: " + ("yes" if service_path.exists() else "no"))
+        print(f"Telegram profiles in autostart: {profile_text}")
         if service_path.exists():
             result = run_autostart_helper(systemctl_command(scope, "is-enabled", service_path.name))
             enabled = (result.stdout or result.stderr or "").strip() or f"exit {result.returncode}"
@@ -4238,6 +4283,7 @@ def cmd_autostart_status(_: argparse.Namespace) -> int:
         print(f"macOS LaunchAgent: {plist_path}")
         installed = plist_path.exists()
         print("Installed: " + ("yes" if installed else "no"))
+        print(f"Telegram profiles in autostart: {profile_text}")
         if installed:
             try:
                 with plist_path.open("rb") as handle:
@@ -4265,6 +4311,7 @@ def cmd_autostart_status(_: argparse.Namespace) -> int:
         print("Task installed: " + ("yes" if task_installed else "no"))
         print(f"Startup fallback: {startup_path}")
         print("Startup fallback installed: " + ("yes" if startup_installed else "no"))
+        print(f"Telegram profiles in autostart: {profile_text}")
         return 0
     raise SystemExit(f"Autostart is not supported on this platform yet: {sys.platform}")
 

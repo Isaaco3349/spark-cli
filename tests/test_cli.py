@@ -138,6 +138,8 @@ from spark_cli.cli import (
     render_launch_agent_plist,
     render_systemd_autostart_unit,
     autostart_shell_command,
+    autostart_shell_commands,
+    windows_cmd_c,
     linux_autostart_path,
     systemctl_command,
     spark_invocation_args,
@@ -1074,11 +1076,43 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("/tmp/spark start telegram-starter", plist)
 
     def test_autostart_shell_command_uses_current_spark_invocation(self) -> None:
-        with patch("spark_cli.cli.spark_invocation_args", return_value=["/tmp/spark"]):
+        with patch("spark_cli.cli.spark_invocation_args", return_value=["/tmp/spark"]), \
+             patch("spark_cli.cli.load_json", return_value={}):
             self.assertEqual(
                 autostart_shell_command("start", "telegram-starter"),
                 "/tmp/spark start --allow-boot-warnings telegram-starter",
             )
+
+    def test_autostart_shell_command_includes_configured_telegram_profiles(self) -> None:
+        setup_state = {
+            "telegram_profiles": {
+                "spark-agi": {"relay_port": 8789},
+                "qa-bot": {"relay_port": 8790},
+            }
+        }
+        with patch("spark_cli.cli.spark_invocation_args", return_value=["/tmp/spark"]), \
+             patch("spark_cli.cli.load_json", return_value=setup_state):
+            self.assertEqual(
+                autostart_shell_commands("start", "telegram-starter"),
+                [
+                    "/tmp/spark start --allow-boot-warnings telegram-starter",
+                    "/tmp/spark start --allow-boot-warnings --profile qa-bot spark-telegram-bot",
+                    "/tmp/spark start --allow-boot-warnings --profile spark-agi spark-telegram-bot",
+                ],
+            )
+            self.assertEqual(
+                autostart_shell_commands("stop", "telegram-starter"),
+                [
+                    "/tmp/spark stop --profile qa-bot spark-telegram-bot",
+                    "/tmp/spark stop --profile spark-agi spark-telegram-bot",
+                    "/tmp/spark stop telegram-starter",
+                ],
+            )
+
+    def test_windows_cmd_c_wraps_chained_autostart_command(self) -> None:
+        wrapped = windows_cmd_c(r"C:\Spark\spark.cmd start telegram-starter && C:\Spark\spark.cmd start spark-telegram-bot")
+        self.assertTrue(wrapped.startswith("cmd.exe /c "))
+        self.assertIn("&&", wrapped)
 
     def test_spark_invocation_args_uses_python_module_when_running_source_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1195,15 +1229,17 @@ class SparkCliTests(unittest.TestCase):
             with patch("spark_cli.cli.sys.platform", "win32"), \
                  patch("spark_cli.cli.windows_startup_script_path", return_value=startup_script), \
                  patch("spark_cli.cli.spark_invocation_args", return_value=[r"C:\Users\Example\.spark\bin\spark.cmd"]), \
+                 patch("spark_cli.cli.load_json", return_value={}), \
                  patch("spark_cli.cli.run_autostart_helper", side_effect=fake_helper), \
                  patch("sys.stdout", new_callable=StringIO):
                 self.assertEqual(args.func(args), 0)
 
             self.assertTrue(startup_script.exists())
             self.assertEqual(commands[0][:7], ["schtasks", "/Create", "/SC", "ONLOGON", "/TN", "Spark Telegram Agent", "/TR"])
+            self.assertIn("cmd.exe /c", commands[0][7])
             self.assertIn("start --allow-boot-warnings telegram-starter", commands[0][7])
             self.assertEqual(commands[0][8], "/F")
-            self.assertIn([r"C:\Users\Example\.spark\bin\spark.cmd", "start", "--allow-boot-warnings", "telegram-starter"], commands)
+            self.assertIn(["cmd", "/c", r"C:\Users\Example\.spark\bin\spark.cmd start --allow-boot-warnings telegram-starter"], commands)
 
     def test_windows_startup_script_path_uses_appdata(self) -> None:
         with patch.dict(os.environ, {"APPDATA": r"C:\Users\Example\AppData\Roaming"}):
@@ -1668,6 +1704,40 @@ class SparkCliTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as error:
             resolve_start_modules("spark-telegram-bot", {gateway.name: gateway})
         self.assertIn("required modules are not installed", str(error.exception))
+
+    def test_start_command_does_not_warn_for_non_runnable_dependencies(self) -> None:
+        builder = Module(
+            name="spark-intelligence-builder",
+            path=Path("C:/tmp/spark-intelligence-builder"),
+            manifest={"module": {"name": "spark-intelligence-builder", "version": "0.1.0", "kind": "runtime", "plane": "runtime"}},
+        )
+        spawner = Module(
+            name="spawner-ui",
+            path=Path("C:/tmp/spawner-ui"),
+            manifest={
+                "module": {"name": "spawner-ui", "version": "0.0.1", "kind": "app", "plane": "execution"},
+                "run": {"default": {"command": "npm run dev"}},
+            },
+        )
+        gateway = Module(
+            name="spark-telegram-bot",
+            path=Path("C:/tmp/spark-telegram-bot"),
+            manifest={
+                "module": {"name": "spark-telegram-bot", "version": "1.0.0", "kind": "service", "plane": "ingress"},
+                "needs": {"modules": ["spark-intelligence-builder", "spawner-ui"]},
+                "run": {"default": {"command": "npm run dev"}},
+            },
+        )
+        args = build_parser().parse_args(["start", "spark-telegram-bot"])
+        with patch(
+            "spark_cli.cli.resolve_installed_modules",
+            return_value={builder.name: builder, spawner.name: spawner, gateway.name: gateway},
+        ), \
+             patch("spark_cli.cli.start_module", return_value=True), \
+             patch("sys.stdout", new_callable=StringIO) as output:
+            self.assertEqual(args.func(args), 0)
+
+        self.assertNotIn("spark-intelligence-builder: no run.default", output.getvalue())
 
     def test_resolve_stop_module_names_stops_dependents_before_dependency(self) -> None:
         builder = Module(
