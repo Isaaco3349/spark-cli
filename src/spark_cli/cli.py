@@ -576,6 +576,71 @@ def pull_module_source(path: Path) -> tuple[bool, str]:
     return result.returncode == 0, summarize_command_output(result)
 
 
+def update_module_source(module: Module) -> tuple[bool, str]:
+    registry_metadata = load_registry_definition().get("modules", {}).get(module.name, {})
+    source = str(registry_metadata.get("source", ""))
+    pinned_commit = validate_commit_pin(str(registry_metadata.get("commit", "")))
+    if not (is_git_source(source) and pinned_commit):
+        return pull_module_source(module.path)
+
+    status = subprocess.run(
+        git_command("-C", str(module.path), "status", "--porcelain"),
+        capture_output=True,
+        text=True,
+    )
+    if status.returncode != 0:
+        return False, summarize_command_output(status)
+    if status.stdout.strip():
+        return False, "working tree has local changes; commit or stash them before updating"
+
+    current = subprocess.run(
+        git_command("-C", str(module.path), "rev-parse", "HEAD"),
+        capture_output=True,
+        text=True,
+    )
+    if current.returncode != 0:
+        return False, summarize_command_output(current)
+    current_commit = current.stdout.strip().lower()
+    if current_commit == pinned_commit:
+        return True, f"already at pinned commit {pinned_commit[:12]}"
+
+    fetch = subprocess.run(
+        git_command("-C", str(module.path), "fetch", "--depth=1", "origin", pinned_commit),
+        capture_output=True,
+        text=True,
+    )
+    if fetch.returncode != 0:
+        return False, summarize_command_output(fetch)
+
+    if bool(registry_metadata.get("require_signed_commit", False)):
+        verify = subprocess.run(
+            git_command("-C", str(module.path), "verify-commit", pinned_commit),
+            capture_output=True,
+            text=True,
+        )
+        if verify.returncode != 0:
+            return False, summarize_command_output(verify)
+
+    checkout = subprocess.run(
+        git_command("-C", str(module.path), "checkout", "--detach", pinned_commit),
+        capture_output=True,
+        text=True,
+    )
+    if checkout.returncode != 0:
+        return False, summarize_command_output(checkout)
+
+    resolved = subprocess.run(
+        git_command("-C", str(module.path), "rev-parse", "HEAD"),
+        capture_output=True,
+        text=True,
+    )
+    if resolved.returncode != 0:
+        return False, summarize_command_output(resolved)
+    if resolved.stdout.strip().lower() != pinned_commit:
+        return False, f"checkout mismatch: expected {pinned_commit}, got {resolved.stdout.strip()}"
+    return True, f"checked out pinned commit {current_commit[:12]}..{pinned_commit[:12]}"
+
+
 def module_is_git_managed(module_path: Path) -> bool:
     try:
         return module_path.is_relative_to(SPARK_HOME / "modules")
@@ -6637,8 +6702,8 @@ def cmd_update(args: argparse.Namespace) -> int:
     print_install_summary(modules)
     for module in modules:
         if module_is_git_managed(module.path):
-            ok, detail = pull_module_source(module.path)
-            print(f"git pull {module.name}: {'ok' if ok else 'failed'} - {detail}")
+            ok, detail = update_module_source(module)
+            print(f"git update {module.name}: {'ok' if ok else 'failed'} - {detail}")
             if not ok:
                 print(f"Update stopped before touching running processes for {module.name}.")
                 print(
