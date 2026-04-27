@@ -22,6 +22,7 @@ from spark_cli.cli import (
     build_parser,
     build_status_repair_hints,
     build_module_envs,
+    call_llm_doctor,
     command_with_managed_python,
     collect_secret_requirements,
     collect_secret_surface_payload,
@@ -584,6 +585,55 @@ class SparkCliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["provider"], "zai")
         self.assertNotIn("zai-secret", json.dumps(payload))
+
+    def test_provider_test_can_call_codex_oauth_cli(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["codex"],
+            0,
+            stdout="PING_OK\n",
+            stderr="",
+        )
+        target = {
+            "provider": "codex",
+            "role": "chat",
+            "model": "gpt-5.5",
+            "auth_mode": "codex_oauth",
+            "cli_path": "codex",
+        }
+        with patch("spark_cli.cli.subprocess.run", return_value=completed) as run_mock, \
+             patch("spark_cli.cli.llm_cli_cwd", return_value=str(Path.cwd())):
+            response = call_llm_doctor(target, "Reply with exactly PING_OK. No extra words.")
+        self.assertEqual(response, "PING_OK")
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:2], ["codex", "exec"])
+        self.assertIn("--skip-git-repo-check", command)
+        self.assertIn("--sandbox", command)
+        self.assertIn("--ephemeral", command)
+        self.assertNotIn("--ask-for-approval", command)
+        self.assertIn("gpt-5.5", command)
+
+    def test_provider_test_can_call_claude_oauth_cli(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["claude"],
+            0,
+            stdout="PING_OK\n",
+            stderr="",
+        )
+        target = {
+            "provider": "anthropic",
+            "role": "chat",
+            "model": "claude-sonnet-4.5",
+            "auth_mode": "claude_oauth",
+            "cli_path": "claude",
+        }
+        with patch("spark_cli.cli.subprocess.run", return_value=completed) as run_mock, \
+             patch("spark_cli.cli.llm_cli_cwd", return_value=str(Path.cwd())):
+            response = call_llm_doctor(target, "Reply with exactly PING_OK. No extra words.")
+        self.assertEqual(response, "PING_OK")
+        command = run_mock.call_args.args[0]
+        self.assertEqual(command[:3], ["claude", "--print", "--output-format"])
+        self.assertIn("--model", command)
+        self.assertIn("claude-sonnet-4.5", command)
 
     def test_new_user_experience_commands_parse(self) -> None:
         parser = build_parser()
@@ -2193,6 +2243,7 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("Turn Spark on", output)
         self.assertIn("spark live start", output)
         self.assertIn("spark live status", output)
+        self.assertIn("spark providers test --role chat", output)
         self.assertIn("spark autostart install --now", output)
         self.assertIn("Finish in Telegram", output)
         self.assertIn("Choose /access 3", output)
@@ -5899,7 +5950,10 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("For default installs, the installer also adds this line to your shell profile", script)
         self.assertIn('source "$SPARK_PREFIX/env"', script)
         self.assertIn("$SPARK_PREFIX/bin/spark providers list", script)
+        self.assertIn("$SPARK_PREFIX/bin/spark live start", script)
+        self.assertIn("$SPARK_PREFIX/bin/spark live status", script)
         self.assertIn("$SPARK_PREFIX/bin/spark providers status", script)
+        self.assertIn("$SPARK_PREFIX/bin/spark providers test --role chat", script)
         self.assertIn("$SPARK_PREFIX/bin/spark verify --onboarding", script)
         self.assertIn("$SPARK_PREFIX/bin/spark fix telegram", script)
         self.assertIn('spark_setup_cmd+=("--minimax-api-key" "$spark_secret_ref_value")', script)
@@ -5947,7 +6001,10 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("[switch]$NoAutostart", script)
         self.assertIn("& $sparkCmd autostart install $Bundle --now", script)
         self.assertIn("spark providers list", script)
+        self.assertIn("spark live start", script)
+        self.assertIn("spark live status", script)
         self.assertIn("spark providers status", script)
+        self.assertIn("spark providers test --role chat", script)
         self.assertIn("spark verify --onboarding", script)
         self.assertIn("spark fix telegram", script)
 

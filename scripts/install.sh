@@ -939,8 +939,10 @@ For default installs, the installer also adds this line to your shell profile:
   source "$SPARK_PREFIX/env"
 
 Operational checks:
-  $SPARK_PREFIX/bin/spark status
+  $SPARK_PREFIX/bin/spark live start
+  $SPARK_PREFIX/bin/spark live status
   $SPARK_PREFIX/bin/spark providers status
+  $SPARK_PREFIX/bin/spark providers test --role chat
   $SPARK_PREFIX/bin/spark verify --onboarding
   $SPARK_PREFIX/bin/spark autostart status
 

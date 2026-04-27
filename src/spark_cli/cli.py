@@ -3784,9 +3784,11 @@ def print_setup_next_steps(bundle_name: str, ingress_owner: Module, llm_state: d
     print("  3. Pick an access level when Spark asks. Most people should choose /access 3.")
     print("     You can change it later with /access 1-4.")
     print("  4. Send /diagnose in Telegram and confirm everything looks OK.")
-    print("  5. Run the onboarding check here if you want a second opinion:")
+    print("  5. Confirm your selected LLM can answer:")
+    print("     spark providers test --role chat")
+    print("  6. Run the onboarding check here if you want a second opinion:")
     print("     spark verify --onboarding")
-    print("  6. Try memory and a tiny build:")
+    print("  7. Try memory and a tiny build:")
     print("     /remember I like concise warm replies")
     print("     /recall concise warm replies")
     print("     /run say exactly OK")
@@ -4829,6 +4831,28 @@ def resolve_llm_doctor_target(args: argparse.Namespace) -> dict[str, Any]:
                 "base_url": base_url,
                 "auth_mode": "local",
             }
+        if provider in {"codex", "openai"} and auth_mode == "codex_oauth":
+            codex = detect_codex_cli()
+            if codex["present"]:
+                return {
+                    "provider": provider,
+                    "role": role,
+                    "model": model,
+                    "base_url": base_url,
+                    "auth_mode": "codex_oauth",
+                    "cli_path": codex["path"],
+                }
+        if provider == "anthropic" and auth_mode == "claude_oauth":
+            claude = detect_claude_code()
+            if claude["present"]:
+                return {
+                    "provider": provider,
+                    "role": role,
+                    "model": model,
+                    "base_url": base_url,
+                    "auth_mode": "claude_oauth",
+                    "cli_path": claude["path"],
+                }
         if auth_mode not in {"not_configured", ""}:
             return {
                 "provider": provider,
@@ -4900,6 +4924,77 @@ def ollama_chat_completion(target: dict[str, Any], prompt: str) -> str:
     return str(content)
 
 
+def llm_cli_creationflags() -> int:
+    if os.name != "nt":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def llm_cli_cwd() -> str:
+    return str(SPARK_HOME if SPARK_HOME.exists() else Path.cwd())
+
+
+def codex_cli_completion(target: dict[str, Any], prompt: str) -> str:
+    codex_path = str(target.get("cli_path") or shutil.which("codex") or "codex")
+    command = [
+        codex_path,
+        "exec",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "read-only",
+        "--ephemeral",
+    ]
+    model = str(target.get("model") or "").strip()
+    if model:
+        command.extend(["--model", model])
+    command.append(prompt)
+    result = subprocess.run(
+        command,
+        cwd=llm_cli_cwd(),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=90,
+        creationflags=llm_cli_creationflags(),
+        env=shell_command_env(filtered=True),
+    )
+    output = (result.stdout or "").strip()
+    if result.returncode != 0:
+        detail = summarize_command_output(result) or f"codex exited with code {result.returncode}"
+        raise SystemExit(detail)
+    if not output:
+        raise SystemExit("Codex CLI returned an empty response.")
+    return output
+
+
+def claude_cli_completion(target: dict[str, Any], prompt: str) -> str:
+    claude_path = str(target.get("cli_path") or shutil.which("claude") or "claude")
+    command = [claude_path, "--print", "--output-format", "text"]
+    model = str(target.get("model") or "").strip()
+    if model:
+        command.extend(["--model", model])
+    command.append(prompt)
+    result = subprocess.run(
+        command,
+        cwd=llm_cli_cwd(),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=90,
+        creationflags=llm_cli_creationflags(),
+        env=shell_command_env(filtered=True),
+    )
+    output = (result.stdout or "").strip()
+    if result.returncode != 0:
+        detail = summarize_command_output(result) or f"claude exited with code {result.returncode}"
+        raise SystemExit(detail)
+    if not output:
+        raise SystemExit("Claude CLI returned an empty response.")
+    return output
+
+
 def call_llm_doctor(target: dict[str, Any], prompt: str) -> str:
     if target.get("unsupported"):
         provider = target.get("provider")
@@ -4909,7 +5004,13 @@ def call_llm_doctor(target: dict[str, Any], prompt: str) -> str:
         )
     provider = target["provider"]
     if provider in {"openai", "zai", "minimax", "openrouter", "huggingface"}:
+        if target.get("auth_mode") == "codex_oauth":
+            return codex_cli_completion(target, prompt)
         return openai_compatible_chat_completion(target, prompt)
+    if provider == "codex":
+        return codex_cli_completion(target, prompt)
+    if provider == "anthropic" and target.get("auth_mode") == "claude_oauth":
+        return claude_cli_completion(target, prompt)
     if provider == "ollama":
         return ollama_chat_completion(target, prompt)
     raise SystemExit(f"Spark Doctor cannot directly call provider `{provider}` yet.")
@@ -5863,6 +5964,7 @@ def onboarding_checklist() -> list[str]:
     return [
         "Open Telegram and send /start to your Spark bot.",
         "Choose an access level when Spark asks; /access 3 is recommended for most users.",
+        "Run spark providers test --role chat and confirm the selected LLM replies with PING_OK.",
         "Send /diagnose in Telegram and confirm Telegram, LLM, memory, and Spawner look OK.",
         "Send /remember I like concise warm replies, then /recall concise warm replies.",
         "Try a tiny build with /run say exactly OK, then check /board.",
@@ -7701,12 +7803,14 @@ def onboarding_guide_payload() -> dict[str, Any]:
             {"title": "Run setup", "steps": [
                 "Run: spark setup",
                 "Paste your BotFather token and Telegram id when asked.",
-                "Choose one Spark brain. Press Enter for the recommended path, or choose your provider.",
+                "Choose one Spark brain. This provider powers chat, memory, and build missions by default.",
+                "Press Enter for the recommended path, or choose your preferred provider.",
                 "If paste is awkward, copy the value first and type @clipboard when Spark asks.",
             ]},
             {"title": "Turn Spark on", "steps": [
                 "Run: spark live start",
                 "Run: spark live status",
+                "Run: spark providers test --role chat",
                 "To start Spark automatically when this computer logs in, run: spark autostart install --now.",
             ]},
             {"title": "Finish in Telegram", "steps": [
