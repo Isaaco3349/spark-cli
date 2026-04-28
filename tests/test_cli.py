@@ -6020,6 +6020,29 @@ class SparkCliTests(unittest.TestCase):
         self.assertTrue(checks["allowed_hosts"]["ok"])
         self.assertTrue(checks["hosted_api_keys"]["ok"])
 
+    def test_collect_hosted_security_payload_uses_tracked_runtime_uids(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "SPARK_HOME": "/data/spark",
+                "SPARK_LLM_PROVIDER": "zai",
+                "SPARK_SPAWNER_HOST": "0.0.0.0",
+                "SPARK_ALLOWED_HOSTS": "spark-live.example.test",
+                "SPARK_BRIDGE_API_KEY": "bridge",
+                "SPARK_UI_API_KEY": "ui",
+            },
+            clear=True,
+        ), patch("spark_cli.cli.current_uid", return_value=0), \
+            patch("spark_cli.cli.load_pids", return_value={"spawner-ui": {"pid": 332}}), \
+            patch("spark_cli.cli.pid_is_running", return_value=True), \
+            patch("spark_cli.cli.proc_uid_for_pid", return_value=1001), \
+            patch("spark_cli.cli.docker_socket_present", return_value=False), \
+            patch("spark_cli.cli.collect_secret_surface_payload", return_value={"ok": True, "detail": "clean", "findings": []}):
+            payload = collect_hosted_security_payload()
+        checks = {check["name"]: check for check in payload["checks"]}
+        self.assertTrue(checks["non_root_runtime"]["ok"])
+        self.assertIn("1001", checks["non_root_runtime"]["detail"])
+
     def test_collect_hosted_security_payload_flags_openclaw_style_risks(self) -> None:
         with patch.dict(
             os.environ,

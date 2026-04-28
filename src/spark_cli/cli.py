@@ -6339,6 +6339,36 @@ def current_uid() -> int | None:
         return None
 
 
+def proc_uid_for_pid(pid: int) -> int | None:
+    status_path = Path("/proc") / str(pid) / "status"
+    try:
+        for line in status_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.startswith("Uid:"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    return int(parts[1])
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def tracked_runtime_uids() -> list[int]:
+    uids: list[int] = []
+    for record in load_pids().values():
+        if not isinstance(record, dict):
+            continue
+        try:
+            pid = int(record.get("pid", 0))
+        except (TypeError, ValueError):
+            continue
+        if not pid or not pid_is_running(pid):
+            continue
+        uid = proc_uid_for_pid(pid)
+        if uid is not None:
+            uids.append(uid)
+    return uids
+
+
 def docker_socket_present() -> bool:
     return Path("/var/run/docker.sock").exists()
 
@@ -6367,20 +6397,27 @@ def collect_hosted_security_payload() -> dict[str, Any]:
     allowed_hosts = [host.strip() for host in (os.environ.get("SPARK_ALLOWED_HOSTS") or "").split(",") if host.strip()]
     spawner_host = (os.environ.get("SPARK_SPAWNER_HOST") or "").strip()
     public_bind = spawner_host in {"0.0.0.0", "::"} or bool(allowed_hosts)
+    runtime_uids = tracked_runtime_uids()
     uid = current_uid()
+    runtime_non_root_ok = all(runtime_uid != 0 for runtime_uid in runtime_uids) if runtime_uids else (uid is None or uid != 0)
+    runtime_uid_detail = (
+        f"Spark tracked runtime process uid(s): {', '.join(str(runtime_uid) for runtime_uid in sorted(set(runtime_uids)))}."
+        if runtime_uids
+        else (
+            f"Spark runtime is not root (uid={uid})."
+            if uid is not None and uid != 0
+            else "Spark runtime appears to be running as root; hosted containers should drop to the spark user after volume prep."
+        )
+    )
     spark_home_value = os.environ.get("SPARK_HOME", str(SPARK_HOME))
     spark_home = Path(spark_home_value).expanduser().resolve()
 
     checks = [
         {
             "name": "non_root_runtime",
-            "ok": uid is None or uid != 0,
+            "ok": runtime_non_root_ok,
             "required": True,
-            "detail": (
-                f"Spark runtime is not root (uid={uid})."
-                if uid is not None and uid != 0
-                else "Spark runtime appears to be running as root; hosted containers should drop to the spark user after volume prep."
-            ),
+            "detail": runtime_uid_detail,
             "repair": "Use the Spark Live Docker entrypoint or run as a non-root user after chowning the state volume.",
         },
         {
