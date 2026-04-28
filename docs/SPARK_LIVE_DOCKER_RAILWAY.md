@@ -11,6 +11,7 @@ This is separate from the locked-down Docker workbench in `docs/OPTIONAL_DOCKER_
 The live container starts:
 
 - `spark setup telegram-starter` in `/data/spark`;
+- `spark update --skip-dirty` so persistent volumes move to the image's current registry pins on redeploy;
 - `spark live start`;
 - `spawner-ui`, bound to `0.0.0.0:$SPARK_SPAWNER_PORT`;
 - `spark-telegram-bot`, using Telegram long polling;

@@ -112,6 +112,11 @@ trap cleanup TERM INT
 log "Configuring Spark in ${SPARK_HOME} with provider '${provider}'..."
 spark "${setup_args[@]}"
 
+if [ "${SPARK_LIVE_SKIP_UPDATE:-0}" != "1" ]; then
+  log "Refreshing installed modules to the image registry pins..."
+  spark update --skip-dirty
+fi
+
 log "Starting Spark Live on Spawner ${SPARK_SPAWNER_HOST}:${SPARK_SPAWNER_PORT}..."
 spark live start
 
