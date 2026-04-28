@@ -2193,11 +2193,79 @@ LLM_PROVIDER_AUTH_HINTS = {
     "minimax": "MINIMAX_API_KEY",
     "ollama": "local Ollama server",
 }
+LLM_PROVIDER_GUIDANCE: dict[str, dict[str, Any]] = {
+    "codex": {
+        "lane": "paid/subscription",
+        "best_for": "Fastest path if you already use ChatGPT or Codex. Good for missions, coding, and broad agent work.",
+        "recommended_models": ["gpt-5.5"],
+        "getting_started": "Install/sign in with Codex CLI: `codex --login`, then run `spark setup --llm-provider codex`.",
+        "notes": "Uses the local Codex CLI sign-in path; no manual OpenAI API key copy-paste is needed for this route.",
+    },
+    "openai": {
+        "lane": "api/paid",
+        "best_for": "OpenAI API users who want an API-key based route for agent chat, memory, and missions.",
+        "recommended_models": ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"],
+        "getting_started": "Create an OpenAI API key, then run `spark setup --llm-provider openai --openai-api-key <key>`.",
+        "notes": "Use gpt-5.5 for complex reasoning/coding; smaller 5.4 variants are better for cost and latency.",
+    },
+    "anthropic": {
+        "lane": "paid/subscription or api/paid",
+        "best_for": "Claude users who want strong conversational coding and planning through Claude Code or Anthropic API.",
+        "recommended_models": ["claude-sonnet-4-6", "claude-opus-4-7"],
+        "getting_started": "Run `claude` to sign in to Claude Code, or provide ANTHROPIC_API_KEY, then run `spark setup --llm-provider anthropic`.",
+        "notes": "Sonnet is the daily-driver default; Opus is better for harder long-running mission work when your plan supports it.",
+    },
+    "openrouter": {
+        "lane": "api/paid gateway",
+        "best_for": "Trying many commercial/open models behind one API key.",
+        "recommended_models": ["openai/gpt-5.5", "anthropic/claude-sonnet-4.6"],
+        "getting_started": "Create an OpenRouter key, then run `spark setup --llm-provider openrouter --openrouter-api-key <key>`.",
+        "notes": "Good if you want one billing/gateway surface and model fallback experiments.",
+    },
+    "zai": {
+        "lane": "api/paid",
+        "best_for": "GLM users who want a coding-endpoint provider for Spark chat, runtime, memory, and missions.",
+        "recommended_models": ["glm-5.1"],
+        "getting_started": "Create a Z.AI key, then run `spark setup --llm-provider zai --zai-api-key <key>`.",
+        "notes": "Good default when you already have a GLM key.",
+    },
+    "minimax": {
+        "lane": "api/paid",
+        "best_for": "MiniMax users who already have a MiniMax API key and want an OpenAI-compatible route.",
+        "recommended_models": ["MiniMax-M2.7"],
+        "getting_started": "Create a MiniMax key, then run `spark setup --llm-provider minimax --minimax-api-key <key>`.",
+        "notes": "Best as a choose-your-provider route, not a forced default.",
+    },
+    "huggingface": {
+        "lane": "api/token gateway",
+        "best_for": "Trying hosted open models through Hugging Face's OpenAI-compatible router.",
+        "recommended_models": ["google/gemma-4-26B-A4B-it:fastest", "google/gemma-4-31B-it:fastest"],
+        "getting_started": "Create a Hugging Face token, then run `spark setup --llm-provider huggingface --huggingface-api-key <key>`.",
+        "notes": "Gemma 4 26B is the chat default; 31B is the heavier mission recommendation.",
+    },
+    "lmstudio": {
+        "lane": "local/free after download",
+        "best_for": "Non-technical local model users who want a desktop app and OpenAI-compatible localhost server.",
+        "recommended_models": ["a loaded LM Studio chat model", "google/gemma-3-27b-it", "qwen3:30b class models if your machine can handle them"],
+        "getting_started": "Install LM Studio, load a chat model, start its local server, then run `spark setup --llm-provider lmstudio --lmstudio-model <loaded-model-id>`.",
+        "notes": "Private/local, but quality depends heavily on your machine and selected model.",
+    },
+    "ollama": {
+        "lane": "local/free after download",
+        "best_for": "Terminal-friendly local models and private/offline memory or lightweight chat.",
+        "recommended_models": ["llama3.2:3b", "gemma3:12b", "gemma3:27b", "qwen3:30b"],
+        "getting_started": "Install Ollama, run `ollama pull llama3.2:3b`, then run `spark setup --llm-provider ollama`.",
+        "notes": "Small models are easy to run; larger models are better for reasoning but need more RAM/VRAM.",
+    },
+}
 
 
 def describe_llm_provider_setup(provider: str) -> str:
     spec = LLM_PROVIDER_ENV[provider]
     auth_hint = LLM_PROVIDER_AUTH_HINTS[provider]
+    guidance = LLM_PROVIDER_GUIDANCE.get(provider, {})
+    lane = guidance.get("lane", "provider")
+    best_for = guidance.get("best_for", "")
     status = ""
     if provider == "openai":
         status = "use OPENAI_API_KEY, or point --openai-base-url at an OpenAI-compatible server"
@@ -2217,7 +2285,32 @@ def describe_llm_provider_setup(provider: str) -> str:
         status = "uses the GLM coding endpoint API key"
     elif provider == "minimax":
         status = "uses the MiniMax OpenAI-compatible API key"
-    return f"{LLM_PROVIDER_LABELS[provider]} ({spec['model_default']}; {auth_hint}; {status})"
+    detail = f"{LLM_PROVIDER_LABELS[provider]} ({spec['model_default']}; {auth_hint}; {lane}; {status})"
+    if best_for:
+        detail = f"{detail} - {best_for}"
+    return detail
+
+
+def provider_recommendations_payload() -> dict[str, Any]:
+    return {
+        "summary": "Spark LLM recommendations",
+        "default_rule": "Choose one Spark brain first; it powers agent chat, Builder/runtime, memory, retrieval, and missions. Split roles later only if you want advanced control.",
+        "paths": {
+            "already_have_subscription": ["codex", "anthropic"],
+            "already_have_api_key": ["openai", "anthropic", "openrouter", "zai", "minimax", "huggingface"],
+            "want_local_private": ["lmstudio", "ollama"],
+            "not_sure": ["codex", "anthropic", "lmstudio"],
+        },
+        "providers": [
+            {
+                "id": provider,
+                "label": LLM_PROVIDER_LABELS[provider],
+                "default_model": LLM_PROVIDER_ENV[provider]["model_default"],
+                **LLM_PROVIDER_GUIDANCE[provider],
+            }
+            for provider in LLM_PROVIDER_WIZARD_ORDER
+        ],
+    }
 
 
 def setup_has_llm_provider_selection(args: argparse.Namespace) -> bool:
@@ -2308,6 +2401,11 @@ def run_llm_provider_wizard(args: argparse.Namespace, secret_values: dict[str, s
     print("Choose your Spark brain")
     print("  This one provider powers chat, Builder, memory, retrieval, and Spawner missions.")
     print("  You can split providers later with the role-specific flags if you want advanced control.")
+    print("  If you are not sure, pick based on what you already have:")
+    print("    - ChatGPT/Codex subscription or sign-in: Codex CLI")
+    print("    - Claude subscription or sign-in: Anthropic / Claude")
+    print("    - API keys already handy: OpenAI, OpenRouter, Z.AI, MiniMax, Hugging Face")
+    print("    - Local/private first: LM Studio for desktop, Ollama for terminal")
     print(f"  Press Enter for the recommended {recommended_label} path, or type a number/provider name.")
     for index, provider in enumerate(LLM_PROVIDER_WIZARD_ORDER, start=1):
         suffix = " [recommended]" if provider == recommended_provider else ""
@@ -5427,10 +5525,10 @@ def provider_catalog_payload() -> dict[str, Any]:
             {
                 "id": "openai",
                 "label": "OpenAI",
-                "auth": ["codex_oauth", "api_key"],
-                "oauth_available": bool(codex["present"]),
+                "auth": ["api_key"],
+                "oauth_available": False,
                 "recommended_for": ["chat", "builder", "mission"],
-                "setup": "spark setup --llm-provider openai",
+                "setup": "spark setup --llm-provider openai --openai-api-key <key>",
             },
             {
                 "id": "codex",
@@ -5471,6 +5569,14 @@ def provider_catalog_payload() -> dict[str, Any]:
                 "oauth_available": False,
                 "recommended_for": ["chat", "builder", "memory"],
                 "setup": "spark setup --llm-provider huggingface --huggingface-api-key <key> --huggingface-model <model>",
+            },
+            {
+                "id": "lmstudio",
+                "label": "LM Studio",
+                "auth": ["local"],
+                "oauth_available": False,
+                "recommended_for": ["chat", "builder", "memory", "mission", "local/private"],
+                "setup": "spark setup --llm-provider lmstudio --lmstudio-model <loaded-model-id>",
             },
             {
                 "id": "minimax",
@@ -5612,6 +5718,27 @@ def provider_test_payload(*, role: str = "chat", provider: str | None = None) ->
 
 
 def cmd_providers(args: argparse.Namespace) -> int:
+    if args.providers_command == "recommend":
+        payload = provider_recommendations_payload()
+        if args.json:
+            print(json.dumps(payload, indent=2))
+            return 0
+        print(payload["summary"])
+        print(payload["default_rule"])
+        print("")
+        print("Fast paths")
+        print("  Already use ChatGPT/Codex: spark setup --llm-provider codex")
+        print("  Already use Claude:        spark setup --llm-provider anthropic")
+        print("  Have an OpenAI API key:    spark setup --llm-provider openai --openai-api-key <key>")
+        print("  Want local/private:        spark setup --llm-provider lmstudio  or  spark setup --llm-provider ollama")
+        print("")
+        print("Provider guide")
+        for provider in payload["providers"]:
+            models = ", ".join(provider["recommended_models"])
+            print(f"- {provider['id']}: {provider['lane']}; models: {models}")
+            print(f"  Best for: {provider['best_for']}")
+            print(f"  Start: {provider['getting_started']}")
+        return 0
     if args.providers_command == "list":
         payload = provider_catalog_payload()
         if args.json:
@@ -8113,6 +8240,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     providers_parser = subparsers.add_parser("providers", help="Inspect Spark LLM provider choices and role wiring")
     providers_sub = providers_parser.add_subparsers(dest="providers_command", required=True)
+    providers_recommend_parser = providers_sub.add_parser("recommend", help="Recommend LLM paths for paid, API-key, and local setups")
+    providers_recommend_parser.add_argument("--json", action="store_true")
+    providers_recommend_parser.set_defaults(func=cmd_providers)
     providers_list_parser = providers_sub.add_parser("list", help="List supported LLM providers and setup paths")
     providers_list_parser.add_argument("--json", action="store_true")
     providers_list_parser.set_defaults(func=cmd_providers)

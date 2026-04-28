@@ -119,6 +119,7 @@ from spark_cli.cli import (
     parse_version_constraint,
     parse_version_tuple,
     provider_status_payload,
+    provider_recommendations_payload,
     provider_test_payload,
     redact_for_llm,
     redact_shareable_text,
@@ -4402,6 +4403,28 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("Codex CLI detected", output)
         self.assertIn("--mission-llm-provider", output)
         self.assertNotIn("Role setup", output)
+
+    def test_provider_recommendations_cover_paid_api_and_local_paths(self) -> None:
+        payload = provider_recommendations_payload()
+        self.assertIn("Choose one Spark brain first", payload["default_rule"])
+        self.assertIn("codex", payload["paths"]["already_have_subscription"])
+        self.assertIn("openai", payload["paths"]["already_have_api_key"])
+        self.assertIn("lmstudio", payload["paths"]["want_local_private"])
+        providers = {provider["id"]: provider for provider in payload["providers"]}
+        self.assertEqual(providers["openai"]["recommended_models"][0], "gpt-5.5")
+        self.assertIn("gpt-5.4-mini", providers["openai"]["recommended_models"])
+        self.assertIn("claude-opus-4-7", providers["anthropic"]["recommended_models"])
+        self.assertIn("google/gemma-4-31B-it:fastest", providers["huggingface"]["recommended_models"])
+        self.assertEqual(providers["lmstudio"]["lane"], "local/free after download")
+
+    def test_cmd_providers_recommend_prints_normie_paths(self) -> None:
+        args = build_parser().parse_args(["providers", "recommend"])
+        with patch("sys.stdout", new_callable=StringIO) as stdout:
+            self.assertEqual(args.func(args), 0)
+        output = stdout.getvalue()
+        self.assertIn("Already use ChatGPT/Codex", output)
+        self.assertIn("Want local/private", output)
+        self.assertIn("spark setup --llm-provider lmstudio", output)
 
     def test_collect_secret_values_prompts_when_interactive_and_missing(self) -> None:
         module = Module(
