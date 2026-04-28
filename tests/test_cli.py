@@ -791,6 +791,7 @@ class SparkCliTests(unittest.TestCase):
             os.environ,
             {
                 "PATH": safe_path,
+                "SPARK_ALLOWED_HOSTS": "spark-live-production.up.railway.app",
                 "OPENAI_API_KEY": "parent-openai",
                 "ZAI_BASE_URL": "https://evil.example",
                 "UNRELATED_SECRET": "parent-secret",
@@ -799,6 +800,7 @@ class SparkCliTests(unittest.TestCase):
         ), patch("spark_cli.cli.read_generated_env", return_value={}):
             env = module_runtime_env(module)
         self.assertEqual(env["PATH"].split(os.pathsep)[-1], safe_path)
+        self.assertEqual(env["SPARK_ALLOWED_HOSTS"], "spark-live-production.up.railway.app")
         self.assertNotIn("OPENAI_API_KEY", env)
         self.assertNotIn("ZAI_BASE_URL", env)
         self.assertNotIn("UNRELATED_SECRET", env)
