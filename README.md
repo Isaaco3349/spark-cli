@@ -160,6 +160,18 @@ Rerunning setup is meant to be a fast configuration refresh. If the starter stac
 spark setup --resume --run-install-commands
 ```
 
+### Optional Memory Sidecars
+
+The default memory install stays conservative: `domain-chip-memory` is active, and external sidecars are off. To opt into the local Graphiti/Kuzu shadow lane for persistent-memory evaluation, run:
+
+```bash
+spark setup --resume --memory-sidecars graphiti-kuzu
+```
+
+This writes Builder config for `spark.memory.sidecars.graphiti.*`, installs `domain-chip-memory[graphiti-kuzu]` unless `--skip-install-commands` is present, and keeps current-state/entity-state memory authoritative until the sidecar has evidence.
+
+Use `--memory-sidecars none` to explicitly disable the optional Graphiti sidecar profile.
+
 By default, one provider powers everything:
 
 ```bash

@@ -23,14 +23,14 @@
     },
     "spark-intelligence-builder": {
       "source": "https://github.com/vibeforge1111/spark-intelligence-builder",
-      "commit": "ca01943de8ab57643ee168fd18a98b002df92f89",
+      "commit": "e80cd62914ddd79904f0187efd0838491c37aed9",
       "require_signed_commit": false,
       "blessed": true,
       "summary": "Spark runtime core for identity, memory, and routing"
     },
     "domain-chip-memory": {
       "source": "https://github.com/vibeforge1111/domain-chip-memory",
-      "commit": "07c87afa37092a380a42d83e1aee8aa756c66b8f",
+      "commit": "479c0566163c895545dbc8af37ba9e8173725238",
       "require_signed_commit": false,
       "blessed": true,
       "summary": "Default memory substrate, benchmark pack, and Telegram memory-check chip"

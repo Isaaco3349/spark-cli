@@ -76,6 +76,10 @@ AUTOSTART_TARGET_PATTERN = re.compile(r"^[a-z0-9-]+$")
 GIT_COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 TELEGRAM_BOT_TOKEN_PATTERN = re.compile(r"\b\d{5,}:[A-Za-z0-9_-]{20,}\b")
 TELEGRAM_BOT_TOKEN_TIMEOUT_SECONDS = 10
+MEMORY_SIDECAR_CHOICES = {"graphiti-kuzu"}
+MEMORY_SIDECAR_DISABLE_CHOICES = {"none", "off", "disabled"}
+DEFAULT_GRAPHITI_KUZU_DB_PATH = "{home}/sidecars/graphiti/kuzu"
+DEFAULT_GRAPHITI_GROUP_ID = "spark-memory"
 SAFE_PARENT_ENV_KEYS = {
     "APPDATA",
     "COMSPEC",
@@ -3030,7 +3034,11 @@ def cmd_telegram_connect(args: argparse.Namespace) -> int:
     )
 
 
-def initialize_builder_runtime_home(modules_by_name: dict[str, Module], secret_values: dict[str, str] | None = None) -> list[str]:
+def initialize_builder_runtime_home(
+    modules_by_name: dict[str, Module],
+    secret_values: dict[str, str] | None = None,
+    setup_state: dict[str, Any] | None = None,
+) -> list[str]:
     notes: list[str] = []
     builder = modules_by_name.get("spark-intelligence-builder")
     if builder is None:
@@ -3078,6 +3086,24 @@ def initialize_builder_runtime_home(modules_by_name: dict[str, Module], secret_v
             activate_chip(config_manager, chip_key="domain-chip-memory")
             sync_attachment_snapshot(config_manager=config_manager, state_db=state_db)
             notes.append(f"activated domain-chip-memory at {memory.path}")
+
+            sidecar_state = setup_state.get("memory_sidecars") if isinstance(setup_state, dict) else None
+            graphiti_state = sidecar_state.get("graphiti") if isinstance(sidecar_state, dict) else None
+            if isinstance(graphiti_state, dict) and graphiti_state.get("enabled") is True:
+                backend = str(graphiti_state.get("backend") or "kuzu")
+                db_path = resolve_builder_graphiti_db_path(builder_home, graphiti_state.get("db_path"))
+                db_path.mkdir(parents=True, exist_ok=True)
+                config_manager.set_path("spark.memory.sidecars.graphiti.enabled", True)
+                config_manager.set_path("spark.memory.sidecars.graphiti.backend", backend)
+                config_manager.set_path("spark.memory.sidecars.graphiti.db_path", str(db_path))
+                config_manager.set_path(
+                    "spark.memory.sidecars.graphiti.group_id",
+                    str(graphiti_state.get("group_id") or DEFAULT_GRAPHITI_GROUP_ID),
+                )
+                notes.append(f"enabled Graphiti {backend} memory sidecar at {db_path}")
+            elif isinstance(graphiti_state, dict) and graphiti_state.get("enabled") is False:
+                config_manager.set_path("spark.memory.sidecars.graphiti.enabled", False)
+                notes.append("disabled optional Graphiti memory sidecar")
 
         setup_secrets = secret_values or {}
         telegram_bot_token = setup_secrets.get("telegram.bot_token") or None
@@ -4197,6 +4223,9 @@ def collect_setup_configuration(
         "llm": llm_setup_state(llm_provider, llm_env),
         "builder_home": str(spark_builder_home()),
     }
+    sidecar_state = memory_sidecar_setup_state(args, existing_setup if isinstance(existing_setup, dict) else None)
+    if sidecar_state is not None:
+        setup_state["memory_sidecars"] = sidecar_state
     if isinstance(preserved_profiles, dict) and preserved_profiles:
         setup_state["telegram_profiles"] = preserved_profiles
     if isinstance(preserved_primary_profile, str) and preserved_primary_profile.strip():
@@ -4243,14 +4272,37 @@ def install_setup_bundle(
         clear_install_progress(module.name)
 
 
+def install_memory_sidecar_dependencies(
+    args: argparse.Namespace,
+    modules: dict[str, Module],
+    setup_state: dict[str, Any],
+) -> None:
+    """Install explicit optional memory sidecar extras after the base bundle exists."""
+    sidecar_state = setup_state.get("memory_sidecars") if isinstance(setup_state, dict) else None
+    enabled = set(sidecar_state.get("enabled") or []) if isinstance(sidecar_state, dict) else set()
+    if "graphiti-kuzu" not in enabled:
+        return
+    memory = modules.get("domain-chip-memory")
+    if memory is None:
+        print("Skipping Graphiti/Kuzu sidecar extra: domain-chip-memory is not in this setup bundle.")
+        return
+    if getattr(args, "skip_install_commands", False):
+        print("Skipping Graphiti/Kuzu sidecar extra install because --skip-install-commands was provided.")
+        return
+    install_target = f"{memory.path}[graphiti-kuzu]"
+    print("Installing optional Graphiti/Kuzu memory sidecar extra for domain-chip-memory...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "-e", install_target], check=True)
+
+
 def write_setup_runtime_config(
     args: argparse.Namespace,
     modules: dict[str, Module],
     bundle: list[Module],
     secret_values: dict[str, str],
+    setup_state: dict[str, Any] | None = None,
 ) -> tuple[list[str], dict[str, str]]:
     """Write Builder state, keychain secrets, and generated module env files."""
-    builder_notes = initialize_builder_runtime_home(modules, secret_values)
+    builder_notes = initialize_builder_runtime_home(modules, secret_values, setup_state)
     keychain_report = persist_keychain_secrets(bundle, secret_values)
     generated_envs = build_module_envs(args, modules, secret_values)
     for module in bundle:
@@ -4327,11 +4379,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
     validate_new_telegram_bot_tokens(args, secret_values)
     save_json(CONFIG_PATH, setup_state)
     install_setup_bundle(args, plan.bundle, plan.installed_modules)
+    install_memory_sidecar_dependencies(args, plan.modules, setup_state)
     builder_notes, keychain_report = write_setup_runtime_config(
         args,
         plan.modules,
         plan.bundle,
         secret_values,
+        setup_state,
     )
     print_setup_summary(args, plan.ingress_owner, builder_notes, keychain_report, setup_state)
     return 0
@@ -4364,6 +4418,62 @@ def persist_keychain_secrets(bundle: list[Module], secret_values: dict[str, str]
 
 def command_with_managed_python(command: str) -> str:
     return subprocess.list2cmdline(install_command_argv(command))
+
+
+def parse_memory_sidecars(value: str) -> list[str]:
+    """Parse explicit optional memory sidecars for setup."""
+    raw_parts = [part.strip().lower() for part in str(value or "").split(",")]
+    parts = [part for part in raw_parts if part]
+    if not parts:
+        return []
+    disabled = [part for part in parts if part in MEMORY_SIDECAR_DISABLE_CHOICES]
+    if disabled:
+        if len(parts) > 1:
+            raise argparse.ArgumentTypeError("Use either 'none' or memory sidecar names, not both.")
+        return []
+    unknown = [part for part in parts if part not in MEMORY_SIDECAR_CHOICES]
+    if unknown:
+        choices = ", ".join(sorted(MEMORY_SIDECAR_CHOICES | MEMORY_SIDECAR_DISABLE_CHOICES))
+        raise argparse.ArgumentTypeError(f"Unsupported memory sidecar {unknown[0]!r}. Choose one of: {choices}.")
+    return sorted(set(parts))
+
+
+def memory_sidecar_setup_state(
+    args: argparse.Namespace,
+    existing_setup: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Build persisted optional memory sidecar setup state.
+
+    The default setup path stays off. If setup is rerun without sidecar flags, preserve
+    any prior explicit sidecar profile so `spark setup --resume` does not silently
+    remove an advanced memory lane.
+    """
+    requested = getattr(args, "memory_sidecars", None)
+    db_path_override = getattr(args, "graphiti_kuzu_db_path", None)
+    if requested is None and db_path_override:
+        requested = ["graphiti-kuzu"]
+    if requested is None:
+        existing = existing_setup.get("memory_sidecars") if isinstance(existing_setup, dict) else None
+        return existing if isinstance(existing, dict) else None
+
+    selected = list(requested or [])
+    state: dict[str, Any] = {"enabled": selected}
+    if "graphiti-kuzu" in selected:
+        state["graphiti"] = {
+            "enabled": True,
+            "backend": "kuzu",
+            "db_path": db_path_override or DEFAULT_GRAPHITI_KUZU_DB_PATH,
+            "group_id": DEFAULT_GRAPHITI_GROUP_ID,
+        }
+    elif requested == []:
+        state["graphiti"] = {"enabled": False, "backend": "kuzu"}
+    return state
+
+
+def resolve_builder_graphiti_db_path(builder_home: Path, configured_path: Any) -> Path:
+    raw_path = str(configured_path or DEFAULT_GRAPHITI_KUZU_DB_PATH)
+    resolved = raw_path.replace("{home}", str(builder_home)).replace("$SPARK_HOME", str(SPARK_HOME))
+    return Path(resolved).expanduser()
 
 
 def resolve_install_executable(name: str) -> str:
@@ -9908,6 +10018,17 @@ def build_parser() -> argparse.ArgumentParser:
         dest="telegram_autostart",
         action="store_false",
         help="Keep this Telegram profile manual; it will not start at login",
+    )
+    setup_parser.add_argument(
+        "--memory-sidecars",
+        type=parse_memory_sidecars,
+        default=None,
+        metavar="NAMES",
+        help="Optional advanced memory sidecars to configure, comma-separated. Use graphiti-kuzu to enable the local Graphiti/Kuzu shadow lane; use none to disable.",
+    )
+    setup_parser.add_argument(
+        "--graphiti-kuzu-db-path",
+        help="Override the local Graphiti/Kuzu sidecar database path. Defaults to Builder home sidecars/graphiti/kuzu.",
     )
     setup_parser.add_argument("--spawner-ui-url", default="http://127.0.0.1:5173")
     setup_parser.add_argument("--llm-provider", choices=LLM_PROVIDER_CHOICES, help="Default provider for all Spark LLM roles unless a role-specific provider is set")

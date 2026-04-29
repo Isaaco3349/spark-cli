@@ -59,6 +59,7 @@ from spark_cli.cli import (
     infer_module_name_from_url,
     initial_follow_log_lines,
     initialize_builder_runtime_home,
+    install_memory_sidecar_dependencies,
     install_command_argv,
     is_dirty_update_failure,
     installer_manifest_payload,
@@ -2114,6 +2115,10 @@ class SparkCliTests(unittest.TestCase):
         args = build_parser().parse_args(["setup", "--non-interactive"])
         self.assertEqual(args.bundle, "telegram-starter")
 
+    def test_setup_parses_optional_memory_sidecar_profile(self) -> None:
+        args = build_parser().parse_args(["setup", "--non-interactive", "--memory-sidecars", "graphiti-kuzu"])
+        self.assertEqual(args.memory_sidecars, ["graphiti-kuzu"])
+
     def test_collect_setup_configuration_preserves_telegram_profiles_on_default_rerun(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp = Path(tmp_dir)
@@ -2159,6 +2164,70 @@ class SparkCliTests(unittest.TestCase):
         self.assertEqual(setup_state["primary_telegram_profile"], "spark-agi")
         self.assertIn("telegram.profiles.spark-agi.bot_token", setup_state["secret_keys"])
         self.assertIn("telegram.bot_token", setup_state["secret_keys"])
+
+    def test_collect_setup_configuration_records_graphiti_kuzu_sidecar_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            args = build_parser().parse_args(
+                [
+                    "setup",
+                    "--non-interactive",
+                    "--memory-sidecars",
+                    "graphiti-kuzu",
+                    "--graphiti-kuzu-db-path",
+                    "C:/spark/graphiti-kuzu",
+                ]
+            )
+            gateway = make_module("spark-telegram-bot", ["telegram.ingress"])
+
+            with patch("spark_cli.cli.CONFIG_PATH", tmp / "setup.json"), \
+                 patch("spark_cli.cli.collect_secret_values", return_value={}), \
+                 patch("spark_cli.cli.ensure_generated_setup_secrets", return_value={}), \
+                 patch("spark_cli.cli.build_llm_env", return_value=("zai", {"ZAI_API_KEY": "key", "ZAI_MODEL": "glm-5.1"})), \
+                 patch("spark_cli.cli.spark_builder_home", return_value=tmp / "state" / "spark-intelligence"):
+                _, setup_state = collect_setup_configuration(
+                    args,
+                    [gateway],
+                    gateway,
+                    interactive=False,
+                )
+
+        self.assertEqual(setup_state["memory_sidecars"]["enabled"], ["graphiti-kuzu"])
+        self.assertEqual(setup_state["memory_sidecars"]["graphiti"]["backend"], "kuzu")
+        self.assertEqual(setup_state["memory_sidecars"]["graphiti"]["db_path"], "C:/spark/graphiti-kuzu")
+        self.assertTrue(setup_state["memory_sidecars"]["graphiti"]["enabled"])
+
+    def test_install_memory_sidecar_dependencies_installs_graphiti_kuzu_extra_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            memory_root = Path(tmp_dir) / "domain-chip-memory"
+            memory_root.mkdir()
+            memory = Module(
+                name="domain-chip-memory",
+                path=memory_root,
+                manifest={"module": {"name": "domain-chip-memory", "version": "0.1.0"}},
+            )
+            args = build_parser().parse_args(["setup", "--non-interactive", "--memory-sidecars", "graphiti-kuzu"])
+            setup_state = {"memory_sidecars": {"enabled": ["graphiti-kuzu"]}}
+
+            with patch("spark_cli.cli.subprocess.run") as run:
+                install_memory_sidecar_dependencies(args, {"domain-chip-memory": memory}, setup_state)
+
+        run.assert_called_once_with(
+            [sys.executable, "-m", "pip", "install", "-e", f"{memory_root}[graphiti-kuzu]"],
+            check=True,
+        )
+
+    def test_install_memory_sidecar_dependencies_honors_skip_install_commands(self) -> None:
+        memory = make_module("domain-chip-memory", ["spark.memory.substrate"])
+        args = build_parser().parse_args(
+            ["setup", "--non-interactive", "--memory-sidecars", "graphiti-kuzu", "--skip-install-commands"]
+        )
+        setup_state = {"memory_sidecars": {"enabled": ["graphiti-kuzu"]}}
+
+        with patch("spark_cli.cli.subprocess.run") as run:
+            install_memory_sidecar_dependencies(args, {"domain-chip-memory": memory}, setup_state)
+
+        run.assert_not_called()
 
     def test_profile_flags_parse_for_setup_start_stop_restart_and_logs(self) -> None:
         setup_args = build_parser().parse_args(
@@ -3201,6 +3270,7 @@ class SparkCliTests(unittest.TestCase):
             (package_root / "config" / "loader.py").write_text(
                 "\n".join(
                     [
+                        "import json",
                         "from pathlib import Path",
                         "class _Paths:",
                         "    def __init__(self, home):",
@@ -3210,21 +3280,26 @@ class SparkCliTests(unittest.TestCase):
                         "        self.home = Path(home)",
                         "        self.paths = _Paths(home)",
                         "        self.config = {}",
+                        "        self.config_path = self.home / 'config.json'",
                         "    @classmethod",
                         "    def from_home(cls, home):",
                         "        return cls(home)",
                         "    def bootstrap(self):",
                         "        self.home.mkdir(parents=True, exist_ok=True)",
+                        "    def _persist(self):",
+                        "        self.config_path.write_text(json.dumps(self.config, sort_keys=True), encoding='utf-8')",
                         "    def set_path(self, path, value):",
                         "        current = self.config",
                         "        parts = path.split('.')",
                         "        for part in parts[:-1]:",
                         "            current = current.setdefault(part, {})",
                         "        current[parts[-1]] = value",
+                        "        self._persist()",
                         "    def load(self):",
                         "        return self.config",
                         "    def save(self, config, **kwargs):",
                         "        self.config = config",
+                        "        self._persist()",
                         "    def upsert_env_secret(self, key, value):",
                         "        self.home.joinpath('.env').write_text(f'{key}={value}\\n', encoding='utf-8')",
                     ]
@@ -3268,6 +3343,13 @@ class SparkCliTests(unittest.TestCase):
                 path=builder_root,
                 manifest={"module": {"name": "spark-intelligence-builder", "version": "0.1.0"}},
             )
+            memory_root = tmp / "domain-chip-memory"
+            memory_root.mkdir()
+            memory = Module(
+                name="domain-chip-memory",
+                path=memory_root,
+                manifest={"module": {"name": "domain-chip-memory", "version": "0.1.0"}},
+            )
             spark_home = tmp / "spark-home"
             state_dir = spark_home / "state"
             saved_modules = {
@@ -3280,8 +3362,19 @@ class SparkCliTests(unittest.TestCase):
             try:
                 with patch.multiple("spark_cli.cli", SPARK_HOME=spark_home, STATE_DIR=state_dir):
                     notes = initialize_builder_runtime_home(
-                        {"spark-intelligence-builder": builder},
+                        {"spark-intelligence-builder": builder, "domain-chip-memory": memory},
                         {"telegram.bot_token": "123456:test-token", "telegram.admin_ids": "111,222"},
+                        {
+                            "memory_sidecars": {
+                                "enabled": ["graphiti-kuzu"],
+                                "graphiti": {
+                                    "enabled": True,
+                                    "backend": "kuzu",
+                                    "db_path": "{home}/sidecars/graphiti/kuzu",
+                                    "group_id": "spark-memory",
+                                },
+                            }
+                        },
                     )
             finally:
                 for key in [key for key in sys.modules if key == "spark_intelligence" or key.startswith("spark_intelligence.")]:
@@ -3291,6 +3384,14 @@ class SparkCliTests(unittest.TestCase):
             self.assertIn("configured Builder telegram channel (allowlist, 2 admin IDs)", notes)
             env_file = state_dir / "spark-intelligence" / ".env"
             self.assertEqual(env_file.read_text(encoding="utf-8"), "TELEGRAM_BOT_TOKEN=123456:test-token\n")
+            builder_home = state_dir / "spark-intelligence"
+            config = json.loads((builder_home / "config.json").read_text(encoding="utf-8"))
+            graphiti = config["spark"]["memory"]["sidecars"]["graphiti"]
+            self.assertTrue(graphiti["enabled"])
+            self.assertEqual(graphiti["backend"], "kuzu")
+            self.assertEqual(graphiti["group_id"], "spark-memory")
+            self.assertEqual(graphiti["db_path"], str(builder_home / "sidecars" / "graphiti" / "kuzu"))
+            self.assertTrue((builder_home / "sidecars" / "graphiti" / "kuzu").exists())
 
     def test_ensure_generated_setup_secrets_adds_relay_secret_for_gateway(self) -> None:
         gateway = make_module("spark-telegram-bot", ["telegram.ingress"], secrets=["telegram.relay_secret"])
