@@ -6630,6 +6630,48 @@ class SparkCliTests(unittest.TestCase):
         }
         self.assertEqual(actual, expected)
 
+    def test_hosted_installer_checks_use_hosted_checksum_metadata(self) -> None:
+        class FakeResponse:
+            def __init__(self, payload: bytes) -> None:
+                self.payload = payload
+
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return self.payload
+
+        local = collect_installer_integrity_payload()
+        local_hashes = {
+            check["name"].removeprefix("local_"): check["actual_sha256"]
+            for check in local["checks"]
+        }
+        checksums_payload = (
+            f"{local_hashes['install.sh']}  install.sh\n"
+            f"{local_hashes['install.ps1']}  install.ps1\n"
+        ).encode("utf-8")
+
+        def fake_urlopen(request: Any, timeout: int = 0) -> FakeResponse:
+            url = request.full_url
+            if url.endswith("/install/checksums.txt"):
+                return FakeResponse(checksums_payload)
+            if url.endswith("/install.sh"):
+                return FakeResponse((Path(__file__).resolve().parents[1] / "scripts" / "install.sh").read_bytes())
+            if url.endswith("/install.ps1"):
+                return FakeResponse((Path(__file__).resolve().parents[1] / "scripts" / "install.ps1").read_bytes())
+            raise AssertionError(url)
+
+        with patch("spark_cli.cli.urllib.request.urlopen", side_effect=fake_urlopen):
+            payload = collect_installer_integrity_payload(hosted=True)
+
+        self.assertTrue(payload["ok"])
+        checks = {check["name"]: check for check in payload["checks"]}
+        self.assertEqual(checks["hosted_install.sh"]["expected_sha256"], local_hashes["install.sh"])
+        self.assertIn("hosted checksum metadata", checks["hosted_install.sh"]["detail"])
+
     def test_verify_installers_uses_integrity_payload(self) -> None:
         args = build_parser().parse_args(["verify", "--installers", "--json"])
         payload = {

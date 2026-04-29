@@ -68,6 +68,7 @@ HOSTED_INSTALLER_URLS = {
     "install.sh": "https://agent.sparkswarm.ai/install.sh",
     "install.ps1": "https://agent.sparkswarm.ai/install.ps1",
 }
+HOSTED_INSTALLER_CHECKSUMS_URL = "https://agent.sparkswarm.ai/install/checksums.txt"
 DEFAULT_TELEGRAM_PROFILE = "default"
 DEFAULT_PRIMARY_TELEGRAM_PROFILE = "primary"
 PRIMARY_TELEGRAM_PROFILE_KEY = "primary_telegram_profile"
@@ -1160,10 +1161,37 @@ def hosted_installer_sha256(name: str, url: str) -> str:
     return sha256_bytes(payload)
 
 
+def hosted_installer_checksums() -> dict[str, str]:
+    request = urllib.request.Request(
+        HOSTED_INSTALLER_CHECKSUMS_URL,
+        headers={
+            "User-Agent": "spark-cli/0.1 installer-integrity",
+            "Accept": "text/plain,*/*",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        payload = response.read().decode("utf-8")
+    checksums: dict[str, str] = {}
+    for line in payload.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        digest, relpath = line.split(maxsplit=1)
+        checksums[Path(relpath).name] = digest.lower()
+    return checksums
+
+
 def collect_installer_integrity_payload(*, hosted: bool = False) -> dict[str, Any]:
     manifest = load_json(INSTALLER_MANIFEST_PATH, {})
     installers = manifest.get("installers") if isinstance(manifest, dict) else None
     checks: list[dict[str, Any]] = []
+    hosted_expected: dict[str, str] = {}
+    hosted_metadata_error = ""
+    if hosted:
+        try:
+            hosted_expected = hosted_installer_checksums()
+        except (OSError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+            hosted_metadata_error = str(exc)
     for name, path in INSTALLER_SCRIPT_PATHS.items():
         expected = ""
         if isinstance(installers, dict) and isinstance(installers.get(name), dict):
@@ -1185,21 +1213,28 @@ def collect_installer_integrity_payload(*, hosted: bool = False) -> dict[str, An
         )
         if hosted:
             url = HOSTED_INSTALLER_URLS[name]
-            try:
-                hosted_hash = hosted_installer_sha256(name, url).lower()
-                hosted_ok = bool(expected) and hosted_hash == expected
-                detail = f"{url} matches committed installer manifest." if hosted_ok else f"{url} does not match committed installer manifest."
-            except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            expected_hosted = hosted_expected.get(name, "")
+            if hosted_metadata_error:
                 hosted_hash = ""
                 hosted_ok = False
-                detail = f"Could not fetch {url}: {exc}"
+                detail = f"Could not fetch hosted installer checksum metadata: {hosted_metadata_error}"
+            else:
+                try:
+                    hosted_hash = hosted_installer_sha256(name, url).lower()
+                    hosted_ok = bool(expected_hosted) and hosted_hash == expected_hosted
+                    detail = f"{url} matches hosted checksum metadata." if hosted_ok else f"{url} does not match hosted checksum metadata."
+                except (OSError, urllib.error.URLError, TimeoutError) as exc:
+                    hosted_hash = ""
+                    hosted_ok = False
+                    detail = f"Could not fetch {url}: {exc}"
             checks.append(
                 {
                     "name": f"hosted_{name}",
                     "ok": hosted_ok,
-                    "expected_sha256": expected,
+                    "expected_sha256": expected_hosted,
                     "actual_sha256": hosted_hash,
                     "url": url,
+                    "checksum_url": HOSTED_INSTALLER_CHECKSUMS_URL,
                     "detail": detail,
                 }
             )
