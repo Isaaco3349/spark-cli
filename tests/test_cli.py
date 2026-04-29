@@ -172,6 +172,7 @@ from spark_cli.cli import (
     pid_is_running,
     print_install_summary,
     process_runtime_detail,
+    provider_secret_env_blocklist,
     runtime_env_contract_errors,
     format_start_warning,
     post_ready_watch_seconds,
@@ -4686,6 +4687,13 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("OPENAI_BASE_URL", blocked)
         self.assertIn("MINIMAX_API_KEY", blocked)
         self.assertIn("ZAI_BASE_URL", blocked)
+
+    def test_provider_secret_env_blocklist_excludes_base_urls(self) -> None:
+        blocked = provider_secret_env_blocklist()
+        self.assertIn("OPENAI_API_KEY", blocked)
+        self.assertIn("MINIMAX_API_KEY", blocked)
+        self.assertNotIn("OPENAI_BASE_URL", blocked)
+        self.assertNotIn("ZAI_BASE_URL", blocked)
 
     def test_strip_reserved_workspace_env_keeps_non_reserved_values(self) -> None:
         stripped = strip_reserved_workspace_env(

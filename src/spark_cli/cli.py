@@ -1670,6 +1670,19 @@ def provider_env_blocklist() -> set[str]:
     return blocked
 
 
+def provider_secret_env_blocklist() -> set[str]:
+    blocked = {
+        key
+        for key in STATIC_PROVIDER_ENV_BLOCKLIST
+        if any(marker in key.upper() for marker in ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL"))
+    }
+    for spec in LLM_PROVIDER_ENV.values():
+        value = spec.get("api_key_env")
+        if value:
+            blocked.add(str(value))
+    return blocked
+
+
 def is_safe_parent_env_key(key: str) -> bool:
     normalized = key.upper()
     return normalized in SAFE_PARENT_ENV_KEYS or any(normalized.startswith(prefix) for prefix in SAFE_PARENT_ENV_PREFIXES)
@@ -5292,7 +5305,7 @@ def module_allowed_secret_env_vars(module: Module) -> set[str]:
 
 def generated_env_contract_errors(modules: dict[str, Module] | None = None) -> list[str]:
     loaded = modules if modules is not None else resolve_installed_modules()
-    blocked = provider_env_blocklist()
+    blocked = provider_secret_env_blocklist()
     errors: list[str] = []
     for module in loaded.values():
         allowed = module_allowed_secret_env_vars(module)
@@ -5311,7 +5324,7 @@ def runtime_env_contract_errors(modules: dict[str, Module] | None = None) -> lis
         loaded = modules if modules is not None else resolve_installed_modules()
     except (OSError, SystemExit, KeyError, tomllib.TOMLDecodeError) as exc:
         return [f"Could not inspect installed module env contracts: {exc}."]
-    blocked = provider_env_blocklist()
+    blocked = provider_secret_env_blocklist()
     errors = generated_env_contract_errors(loaded)
     for module in loaded.values():
         allowed = module_allowed_secret_env_vars(module)
