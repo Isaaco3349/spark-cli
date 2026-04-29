@@ -100,6 +100,7 @@ from spark_cli.cli import (
     render_init_spark_toml,
     scaffold_module_files,
     save_json,
+    security_provider_detail,
     validate_init_module_name,
     describe_install_risk,
     enforce_module_trust_scan,
@@ -677,6 +678,19 @@ class SparkCliTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertFalse(checks["hosted_no_docker_socket"]["ok"])
         self.assertEqual(checks["hosted_no_docker_socket"]["severity"], "high")
+
+    def test_security_provider_detail_names_roles_models_and_auth(self) -> None:
+        detail = security_provider_detail({
+            "ok": True,
+            "roles": {
+                "chat": {"provider": "anthropic", "model": "sonnet", "auth_mode": "claude_oauth", "ready": True},
+                "builder": {"provider": "zai", "model": "glm-5.1", "auth_mode": "api_key", "ready": True},
+                "memory": {"provider": "zai", "model": "glm-5.1", "auth_mode": "api_key", "ready": True},
+                "mission": {"provider": "codex", "model": "gpt-5.5", "auth_mode": "codex_oauth", "ready": False},
+            },
+        })
+        self.assertIn("chat=anthropic/sonnet via claude_oauth", detail)
+        self.assertIn("mission=codex/gpt-5.5 via codex_oauth (not ready)", detail)
 
     def test_provider_test_uses_configured_target_and_redacts_failures(self) -> None:
         with patch("spark_cli.cli.resolve_provider_test_target", return_value={

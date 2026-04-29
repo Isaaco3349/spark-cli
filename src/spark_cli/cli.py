@@ -4987,6 +4987,30 @@ def running_as_hosted_context() -> bool:
     )
 
 
+def security_provider_detail(provider_payload: dict[str, Any]) -> str:
+    roles = provider_payload.get("roles")
+    if not isinstance(roles, dict) or not roles:
+        summary = str(provider_payload.get("summary") or "Spark LLM provider roles")
+        repair_hints = provider_payload.get("repair_hints")
+        if isinstance(repair_hints, list) and repair_hints:
+            return f"{summary}: {'; '.join(str(item) for item in repair_hints[:3])}"
+        return summary
+
+    parts: list[str] = []
+    for role in LLM_ROLES:
+        role_payload = roles.get(role)
+        if not isinstance(role_payload, dict):
+            parts.append(f"{role}=not configured")
+            continue
+        provider = str(role_payload.get("provider") or "not configured")
+        model = str(role_payload.get("model") or "default")
+        auth_mode = str(role_payload.get("auth_mode") or "unknown")
+        ready = bool(role_payload.get("ready"))
+        suffix = "" if ready else " (not ready)"
+        parts.append(f"{role}={provider}/{model} via {auth_mode}{suffix}")
+    return "; ".join(parts)
+
+
 def collect_security_audit_payload(*, deep: bool = False, hosted: bool = False) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     secret_surface = collect_secret_surface_payload()
@@ -5069,7 +5093,7 @@ def collect_security_audit_payload(*, deep: bool = False, hosted: bool = False) 
     checks.append(security_check(
         "llm_roles",
         bool(provider_payload.get("ok")),
-        str(provider_payload.get("summary", "")),
+        security_provider_detail(provider_payload),
         "spark providers status",
         severity="medium",
     ))
@@ -5146,12 +5170,15 @@ def cmd_security(args: argparse.Namespace) -> int:
         if check.get("ok"):
             marker = "[OK]"
         else:
-            marker = "[FIX]"
+            severity = str(check.get("severity") or "medium").upper()
+            marker = f"[FIX:{severity}]"
         print(f"{marker} {check['name']}: {check['detail']}")
         if not check.get("ok") and check.get("repair"):
             print(f"      {check['repair']}")
     print("")
     print("Safe sharing:")
+    print("  Nothing is uploaded by this command.")
+    print("  Review every bundle before sharing.")
     print("  spark support bundle")
     print("  spark support bundle --include-logs")
     return 0 if payload.get("ok") else 1
