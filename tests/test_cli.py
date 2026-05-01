@@ -3207,6 +3207,57 @@ class SparkCliTests(unittest.TestCase):
             self.assertIn("Startup fallback installed: yes", text)
             self.assertIn("Run-key fallback installed: yes", text)
 
+    def test_fix_autostart_json_flags_stale_windows_startup_hook(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            startup_script = Path(tmp_dir) / "spark-telegram-agent.vbs"
+            startup_script.write_text("old spark start telegram-starter\r\n", encoding="ascii")
+
+            def fake_helper(command: list[str]) -> subprocess.CompletedProcess[str]:
+                if command[:2] == ["schtasks", "/Query"]:
+                    return subprocess.CompletedProcess(command, 1, "", "not found")
+                if command[:2] == ["reg", "query"]:
+                    return subprocess.CompletedProcess(command, 0, "Spark Telegram Agent REG_SZ wscript.exe", "")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            args = build_parser().parse_args(["fix", "autostart", "--json"])
+            with patch("spark_cli.cli.sys.platform", "win32"), \
+                 patch("spark_cli.cli.windows_startup_script_path", return_value=startup_script), \
+                 patch("spark_cli.cli.spark_invocation_args", return_value=[r"C:\Users\Example\.spark\bin\spark.cmd"]), \
+                 patch("spark_cli.cli.run_autostart_helper", side_effect=fake_helper), \
+                 patch("spark_cli.cli.load_json", return_value={"telegram_profiles": {"spark-agi": {"relay_port": 8789}}}), \
+                 patch("sys.stdout", new_callable=StringIO) as output:
+                self.assertEqual(args.func(args), 1)
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(payload["summary"], "Spark autostart repair")
+            self.assertTrue(payload["checks"][0]["ok"])
+            self.assertFalse(payload["checks"][1]["ok"])
+            self.assertTrue(
+                any("autostart command does not match" in warning for warning in payload["hooks"][1]["warnings"])
+            )
+
+    def test_fix_autostart_reports_manual_telegram_profiles(self) -> None:
+        setup_state = {
+            "telegram_profiles": {
+                "spark-agi": {"relay_port": 8789, "autostart": False},
+            }
+        }
+        args = build_parser().parse_args(["fix", "autostart"])
+        with patch("spark_cli.cli.sys.platform", "linux"), \
+             patch("spark_cli.cli.running_under_wsl", return_value=False), \
+             patch("spark_cli.cli.linux_autostart_scope", return_value="user"), \
+             patch("spark_cli.cli.linux_autostart_path", return_value=Path("/tmp/missing.service")), \
+             patch("spark_cli.cli.linux_xdg_autostart_path", return_value=Path("/tmp/missing.desktop")), \
+             patch("spark_cli.cli.spark_invocation_args", return_value=["/tmp/spark"]), \
+             patch("spark_cli.cli.load_json", return_value=setup_state), \
+             patch("sys.stdout", new_callable=StringIO) as output:
+            self.assertEqual(args.func(args), 1)
+
+        text = output.getvalue()
+        self.assertIn("[FIX] OS login hook", text)
+        self.assertIn("[FIX] Telegram profile selection", text)
+        self.assertIn("spark autostart profile <profile> on", text)
+
     def test_windows_run_key_installed_uses_reg_query(self) -> None:
         commands: list[list[str]] = []
 

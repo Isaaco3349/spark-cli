@@ -6639,6 +6639,114 @@ def collect_simple_fix_payload(target: str) -> dict[str, Any]:
     return recipes[target]
 
 
+def collect_autostart_fix_payload() -> dict[str, Any]:
+    profiles = autostart_telegram_profiles()
+    configured = configured_telegram_profiles()
+    manual = manual_telegram_profiles()
+    expected_command = autostart_shell_command("start", "telegram-starter")
+    hook_details: list[dict[str, Any]] = []
+    installed = False
+
+    def add_file_hook(name: str, path: Path | None, *, exists: bool | None = None) -> None:
+        nonlocal installed
+        if path is None:
+            hook_details.append({"name": name, "path": "unavailable", "exists": False, "warnings": ["path unavailable"]})
+            return
+        audit = autostart_file_audit(path, expected_command=expected_command)
+        if exists is not None:
+            audit["exists"] = exists
+        installed = installed or bool(audit["exists"])
+        hook_details.append({"name": name, **audit})
+
+    if sys.platform.startswith("linux") and running_under_wsl():
+        add_file_hook("WSL Windows-login fallback", wsl_windows_startup_script_path())
+    elif sys.platform.startswith("linux"):
+        add_file_hook("Linux systemd service", linux_autostart_path(linux_autostart_scope()))
+        add_file_hook("Linux desktop fallback", linux_xdg_autostart_path())
+    elif sys.platform == "darwin":
+        add_file_hook("macOS LaunchAgent", macos_autostart_path())
+    elif sys.platform == "win32":
+        task_result = run_autostart_helper(["schtasks", "/Query", "/TN", AUTOSTART_WINDOWS_TASK_NAME])
+        task_installed = task_result.returncode == 0
+        run_key_installed = windows_run_key_installed()
+        installed = installed or task_installed or run_key_installed
+        hook_details.append(
+            {
+                "name": "Windows logon task",
+                "path": AUTOSTART_WINDOWS_TASK_NAME,
+                "exists": task_installed,
+                "warnings": [] if task_installed else ["scheduled task is not installed"],
+            }
+        )
+        add_file_hook("Windows Startup fallback", windows_startup_script_path())
+        hook_details.append(
+            {
+                "name": "Windows Run-key fallback",
+                "path": windows_run_key_path(),
+                "exists": run_key_installed,
+                "warnings": [] if run_key_installed else ["Run-key fallback is not installed"],
+            }
+        )
+    else:
+        hook_details.append({"name": sys.platform, "path": "unsupported", "exists": False, "warnings": ["platform unsupported"]})
+
+    existing_file_hooks = [hook for hook in hook_details if hook.get("exists") and hook.get("readable")]
+    stale_hooks = [
+        hook
+        for hook in existing_file_hooks
+        if hook.get("current_command") is False or hook.get("current_home") is False or hook.get("parent_private") is False
+    ]
+    hook_warnings = [
+        warning
+        for hook in hook_details
+        for warning in hook.get("warnings", [])
+        if hook.get("exists") or "platform unsupported" in str(warning) or "path unavailable" in str(warning)
+    ]
+    checks = [
+        {
+            "name": "OS login hook",
+            "ok": installed,
+            "detail": "At least one OS login autostart hook is installed." if installed else "No OS login autostart hook is installed.",
+            "repair": "spark autostart install --now",
+        },
+        {
+            "name": "current startup target",
+            "ok": installed and not stale_hooks,
+            "detail": (
+                "Installed autostart hook(s) point at the current Spark command and home."
+                if installed and not stale_hooks
+                else "One or more installed autostart hook(s) look stale or writable by other local users."
+            ),
+            "repair": "spark autostart install --now",
+        },
+        {
+            "name": "Telegram profile selection",
+            "ok": bool(profiles) or not configured,
+            "detail": (
+                f"Autostart profiles: {', '.join(profiles)}"
+                if profiles
+                else "No Telegram profiles are enabled for autostart."
+            ),
+            "repair": "spark autostart profile <profile> on",
+        },
+    ]
+    return {
+        "summary": "Spark autostart repair",
+        "checks": checks,
+        "hooks": hook_details,
+        "warnings": hook_warnings,
+        "telegram_profiles_configured": configured,
+        "telegram_profiles_autostart": profiles,
+        "telegram_profiles_manual": manual,
+        "next_commands": [
+            "spark autostart status",
+            "spark autostart install --now",
+            "spark autostart off",
+            "spark live status",
+        ],
+    }
+
+
 def cmd_fix(args: argparse.Namespace) -> int:
     if args.target == "secrets":
         if getattr(args, "redact_logs", False):
@@ -6677,7 +6785,7 @@ def cmd_fix(args: argparse.Namespace) -> int:
         return 0 if payload.get("ok") else 1
 
     if args.target in {"spawner", "providers", "memory", "live", "update", "autostart"}:
-        payload = collect_simple_fix_payload(args.target)
+        payload = collect_autostart_fix_payload() if args.target == "autostart" else collect_simple_fix_payload(args.target)
         if args.json:
             print(json.dumps(payload, indent=2))
             return 0 if all(check.get("ok") for check in payload.get("checks", [])) else 1
@@ -6688,6 +6796,14 @@ def cmd_fix(args: argparse.Namespace) -> int:
             print(f"{marker} {check['name']}: {check['detail']}")
             if not check["ok"] and check.get("repair"):
                 print(f"      {check['repair']}")
+        if args.target == "autostart" and payload.get("hooks"):
+            print("")
+            print("Hooks:")
+            for hook in payload["hooks"]:
+                installed_text = "yes" if hook.get("exists") else "no"
+                print(f"  - {hook.get('name')}: installed={installed_text}; {hook.get('path')}")
+                for warning in hook.get("warnings", []):
+                    print(f"      warning: {warning}")
         print("")
         print("Useful commands:")
         for command in payload["next_commands"]:
