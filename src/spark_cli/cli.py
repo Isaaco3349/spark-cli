@@ -1854,8 +1854,7 @@ def shell_command_env(*, filtered: bool = False) -> dict[str, str]:
     managed_node_dir = SPARK_HOME / "tools" / "node-v22.18.0-win-x64"
     if os.name == "nt" and managed_node_dir.exists():
         env["PATH"] = str(managed_node_dir) + os.pathsep + env.get("PATH", "")
-    current_python = Path(sys.executable)
-    python_path = str(current_python) if current_python.exists() else resolve_runtime_binary("python")
+    python_path = sys.executable if os.path.exists(sys.executable) else resolve_runtime_binary("python")
     if not python_path:
         return env
 

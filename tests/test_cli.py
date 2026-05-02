@@ -1071,6 +1071,7 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("sonnet", command)
 
     def test_provider_test_wraps_windows_claude_powershell_shim(self) -> None:
+        cwd = os.getcwd()
         completed = subprocess.CompletedProcess(
             ["powershell"],
             0,
@@ -1086,7 +1087,7 @@ class SparkCliTests(unittest.TestCase):
         }
         with patch("spark_cli.cli.os.name", "nt"), \
              patch("spark_cli.cli.subprocess.run", return_value=completed) as run_mock, \
-             patch("spark_cli.cli.llm_cli_cwd", return_value=str(Path.cwd())):
+             patch("spark_cli.cli.llm_cli_cwd", return_value=cwd):
             response = call_llm_doctor(target, "Reply with exactly PING_OK. No extra words.")
         self.assertEqual(response, "PING_OK")
         command = run_mock.call_args.args[0]
