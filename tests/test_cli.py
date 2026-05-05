@@ -8005,7 +8005,7 @@ class SparkCliTests(unittest.TestCase):
         script = script_path.read_text(encoding="utf-8")
         self.assertIn('SPARK_PREFIX="${SPARK_PREFIX:-$HOME/.spark}"', script)
         self.assertIn('SPARK_CLI_RELEASE_NAME="${SPARK_CLI_RELEASE_NAME:-spark-cli-launch-2026-05-05}"', script)
-        self.assertIn('SPARK_DEFAULT_CLI_REF="33f52540d070fd1b7ddd3c0eca68cd353c85795b"', script)
+        self.assertIn('SPARK_DEFAULT_CLI_REF="dcf7d2e8c29d1d9df998192e5c26ee7df961600d"', script)
         self.assertIn('SPARK_CLI_REF_USER_SET=0', script)
         self.assertIn('SPARK_NODE_VERSION="${SPARK_NODE_VERSION:-22.18.0}"', script)
         self.assertIn('SPARK_MANAGED_NODE="${SPARK_MANAGED_NODE:-0}"', script)
@@ -8081,7 +8081,7 @@ class SparkCliTests(unittest.TestCase):
     def test_windows_install_script_bootstraps_local_prefix_contract(self) -> None:
         script = (Path(__file__).resolve().parents[1] / "scripts" / "install.ps1").read_text(encoding="utf-8")
         self.assertIn('[string]$Prefix = "$HOME\\.spark"', script)
-        self.assertIn('[string]$Ref = "33f52540d070fd1b7ddd3c0eca68cd353c85795b"', script)
+        self.assertIn('[string]$Ref = "dcf7d2e8c29d1d9df998192e5c26ee7df961600d"', script)
         self.assertIn('$SparkCliReleaseName = "spark-cli-launch-2026-05-05"', script)
         self.assertIn("$RefWasProvided = $PSBoundParameters.ContainsKey(\"Ref\")", script)
         self.assertIn('[string]$NodeVersion = "22.18.0"', script)
