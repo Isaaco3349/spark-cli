@@ -1,7 +1,7 @@
 param(
     [string]$Prefix = "$HOME\.spark",
     [string]$Source = "https://github.com/vibeforge1111/spark-cli",
-    [string]$Ref = "0db74200fc9e1ce9c73d9a65d68c85fd165ccc8f",
+    [string]$Ref = "33f52540d070fd1b7ddd3c0eca68cd353c85795b",
     [string]$NodeVersion = "22.18.0",
     [string]$PythonVersion = "3.11",
     [string]$UvVersion = "0.11.7",
@@ -29,7 +29,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$SparkCliReleaseName = "spark-cli-launch-2026-05-02-2"
+$SparkCliReleaseName = "spark-cli-launch-2026-05-05"
 $RefWasProvided = $PSBoundParameters.ContainsKey("Ref")
 $Script:InstallLockDir = ""
 $Script:PythonExe = ""
@@ -327,8 +327,13 @@ function Start-InstallLog {
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     $Script:InstallLogPath = Join-Path $logDir "install.log"
     Write-SparkLog "Writing install log to $Script:InstallLogPath"
+    $transcriptCommand = Get-Command Start-Transcript -ErrorAction SilentlyContinue
+    if (-not $transcriptCommand -or -not $transcriptCommand.Parameters.ContainsKey("UseMinimalHeader")) {
+        Write-Warning "Install transcript disabled because this PowerShell cannot omit the command-line header."
+        return
+    }
     try {
-        Start-Transcript -Path $Script:InstallLogPath -Append | Out-Null
+        Start-Transcript -Path $Script:InstallLogPath -Append -UseMinimalHeader | Out-Null
         $Script:TranscriptStarted = $true
     } catch {
         Write-Warning "Could not start install transcript at $Script:InstallLogPath"
@@ -732,7 +737,7 @@ function Invoke-Install {
     Write-Host ""
     Write-Host "Finish in Telegram:"
     Write-Host "  1. Open your Spark bot and send /start"
-    Write-Host "  2. Pick an access level when Spark asks. Most people should use /access 3"
+    Write-Host "  2. Choose what Spark can do when asked. Most people should allow chat, memory, diagnostics, public research, and approved missions"
     Write-Host "  3. Send /diagnose"
     Write-Host "  4. Try memory: /remember I like concise warm replies"
     Write-Host "  5. Try a tiny build: /run say exactly OK"

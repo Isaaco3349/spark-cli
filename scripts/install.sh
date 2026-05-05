@@ -3,8 +3,8 @@ set -euo pipefail
 
 SPARK_PREFIX="${SPARK_PREFIX:-$HOME/.spark}"
 SPARK_CLI_SOURCE="${SPARK_CLI_SOURCE:-https://github.com/vibeforge1111/spark-cli}"
-SPARK_CLI_RELEASE_NAME="${SPARK_CLI_RELEASE_NAME:-spark-cli-launch-2026-05-02-2}"
-SPARK_DEFAULT_CLI_REF="0db74200fc9e1ce9c73d9a65d68c85fd165ccc8f"
+SPARK_CLI_RELEASE_NAME="${SPARK_CLI_RELEASE_NAME:-spark-cli-launch-2026-05-05}"
+SPARK_DEFAULT_CLI_REF="33f52540d070fd1b7ddd3c0eca68cd353c85795b"
 SPARK_CLI_REF_USER_SET=0
 if [ -n "${SPARK_CLI_REF:-}" ]; then
   SPARK_CLI_REF_USER_SET=1
@@ -982,7 +982,7 @@ Install log:
 
 Finish in Telegram:
   1. Open your Spark bot and send /start
-  2. Pick an access level when Spark asks. Most people should use /access 3
+  2. Choose what Spark can do when asked. Most people should allow chat, memory, diagnostics, public research, and approved missions
   3. Send /diagnose
   4. Try memory: /remember I like concise warm replies
   5. Try a tiny build: /run say exactly OK
