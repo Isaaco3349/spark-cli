@@ -26,14 +26,14 @@
     },
     "spark-telegram-bot": {
       "source": "https://github.com/vibeforge1111/spark-telegram-bot",
-      "commit": "4b86dffe489bd4303c79cc5e8df93362c12579c4",
+      "commit": "77b36933ff04bb88dfe8d4bef6289fd3b26f6683",
       "require_signed_commit": false,
       "blessed": true,
       "summary": "Telegram ingress gateway for the Spark starter stack",
       "attestation": {
         "type": "git-commit-pin-v1",
         "source": "https://github.com/vibeforge1111/spark-telegram-bot",
-        "commit": "4b86dffe489bd4303c79cc5e8df93362c12579c4"
+        "commit": "77b36933ff04bb88dfe8d4bef6289fd3b26f6683"
       }
     },
     "spark-intelligence-builder": {
@@ -62,14 +62,14 @@
     },
     "spawner-ui": {
       "source": "https://github.com/vibeforge1111/vibeship-spawner-ui",
-      "commit": "a2210730e836e3923d7eb0764f210bb27faecbab",
+      "commit": "e0ee47ac8cd40d44489e5d42b5a47d3041b4b5df",
       "require_signed_commit": false,
       "blessed": true,
       "summary": "Execution plane and local dashboard for the Spark starter stack",
       "attestation": {
         "type": "git-commit-pin-v1",
         "source": "https://github.com/vibeforge1111/vibeship-spawner-ui",
-        "commit": "a2210730e836e3923d7eb0764f210bb27faecbab"
+        "commit": "e0ee47ac8cd40d44489e5d42b5a47d3041b4b5df"
       }
     }
   },
