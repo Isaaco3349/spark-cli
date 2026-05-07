@@ -4732,6 +4732,18 @@ def collect_setup_configuration(
     preserved_profiles = existing_setup.get("telegram_profiles") if isinstance(existing_setup, dict) else None
     preserved_primary_profile = existing_setup.get(PRIMARY_TELEGRAM_PROFILE_KEY) if isinstance(existing_setup, dict) else None
     preserved_onboarding_session = existing_setup.get("onboarding_session") if isinstance(existing_setup, dict) else None
+    if getattr(args, "external_telegram_ingress", False):
+        stale_telegram_secret_ids = {
+            key
+            for key in preserved_secret_keys | set(secret_values.keys())
+            if key in {"telegram.bot_token", "telegram.admin_ids"}
+            or (key.startswith("telegram.profiles.") and key.endswith(".bot_token"))
+        }
+        for secret_id in stale_telegram_secret_ids:
+            delete_secret(secret_id)
+        preserved_secret_keys.difference_update(stale_telegram_secret_ids)
+        preserved_profiles = None
+        preserved_primary_profile = None
     setup_state = {
         "bundle": args.bundle,
         "modules": [module.name for module in bundle],
