@@ -90,7 +90,7 @@ name = "memory"
 version = "0.3.0"
 description = "Persistent memory for Spark agents"
 homepage = "https://github.com/spark/spark-memory"
-license = "AGPL-3.0-only"
+license = "MIT"
 
 [runtime]
 kind = "python"           # python | node | go | rust | binary
@@ -390,20 +390,25 @@ Pro you want during trial, no payment until it ends.
 ### Open-format-paid-corpus principle (technical statement)
 
 - The `spark.toml` schema, the H70-C+ skill format spec, the registry
-  format, and the CLI itself: **AGPL-3.0-only, open source.**
+  format, and the CLI itself: **MIT-licensed, open source.**
+- Spark Swarm is **AGPL-licensed.** Other Spark repos are **MIT** unless
+  their `LICENSE` file says otherwise.
 - The Spark-curated H70 skill corpus, the spark-blessed premium chips,
-  the Spark Cloud / hosted dashboard infrastructure: **proprietary,
-  Spark Pro.**
+  the Spark Cloud / hosted dashboard infrastructure, private corpuses,
+  brand assets, deployment secrets, and Pro drops: **proprietary,
+  Spark Pro.** Pro drops do not grant redistribution rights unless a
+  separate written license says so.
 - A community module author can ship an H70 skill catalog of their own
   under any license they choose. They can charge for it themselves
   (their own license server in `[license.provider]`) or give it away
   for free.
 
-This split is enforced by being clear about what files / repos are AGPL-3.0-only
-vs proprietary. Don't mix them in the same repo. The blessed registry
-manifest itself is AGPL-3.0-only (`github.com/spark/registry`). The corpus
-content is in a separate proprietary repo (`github.com/spark/corpus`)
-that the registry points at via signed URLs requiring license tokens.
+This split is enforced by being clear about each repo's `LICENSE` file
+and by keeping proprietary Spark Pro artifacts out of MIT/AGPL repos. Do
+not mix them in the same repo. The blessed registry manifest itself is MIT
+(`github.com/spark/registry`). The corpus content is in a separate
+proprietary repo (`github.com/spark/corpus`) that the registry points at
+via signed URLs requiring license tokens.
 
 ### Anti-piracy posture
 
@@ -412,7 +417,8 @@ that the registry points at via signed URLs requiring license tokens.
 - **License verification at install/start, not at every read.** Pirates
   exist; the value is in being the trusted, vetted, up-to-date source —
   pirated copies go stale within days as new skills land.
-- **Terms of service forbid redistribution.** Soft enforcement.
+- **Pro drops grant access, not redistribution.** They are not covered by
+  open-source repo licenses unless a separate written license says so.
 - **Curated corpus updates ship through registry pulls,** so a pirated
   v1 corpus becomes obsolete the moment v2 ships.
 
