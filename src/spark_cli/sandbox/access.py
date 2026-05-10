@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -173,6 +175,100 @@ def generated_level5_env(*, home: Path | None = None, env: dict[str, str] | None
     for path in paths.values():
         merged.update(read_env_file(path))
     return merged
+
+
+def home_or_default(*, home: Path | None = None, env: dict[str, str] | None = None) -> Path:
+    env_values = env or os.environ
+    return home or Path(env_values.get("SPARK_HOME", Path.home() / ".spark")).expanduser()
+
+
+def _parse_utc_timestamp(value: object) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _latest_level5_configure_timestamp(*, home: Path | None = None) -> float | None:
+    path = home_or_default(home=home) / "logs" / "remote" / "access" / "level5.jsonl"
+    if not path.exists():
+        return None
+    configured_at: float | None = None
+    disabled_at: float | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        timestamp = _parse_utc_timestamp(event.get("timestamp"))
+        if timestamp is None:
+            continue
+        action_id = event.get("action_id")
+        if action_id == "level5_guardrails_configure":
+            configured_at = timestamp
+        elif action_id == "level5_guardrails_disable":
+            disabled_at = timestamp
+    if configured_at is None:
+        return None
+    if disabled_at is not None and disabled_at >= configured_at:
+        return None
+    return configured_at
+
+
+def level5_service_guardrail_state(
+    *,
+    home: Path | None = None,
+    env: dict[str, str] | None = None,
+    configured: bool,
+) -> dict[str, Any]:
+    spark_home = home_or_default(home=home, env=env)
+    configured_at = _latest_level5_configure_timestamp(home=spark_home) if configured else None
+    state: dict[str, Any] = {
+        "enabled": False,
+        "activation_state": "blocked" if not configured else "restart_required",
+        "configured_at": None,
+        "modules": {},
+    }
+    if configured_at is None:
+        return state
+    state["configured_at"] = datetime.fromtimestamp(configured_at, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    pids_path = spark_home / "state" / "pids.json"
+    try:
+        pids = json.loads(pids_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pids = {}
+    expected = {
+        "spawner-ui": False,
+        "spark-telegram-bot": False,
+    }
+    modules: dict[str, Any] = {}
+    if isinstance(pids, dict):
+        for key, record in pids.items():
+            if not isinstance(record, dict):
+                continue
+            module = str(record.get("module") or key.split(":", 1)[0])
+            if module not in expected:
+                continue
+            started_at = _parse_utc_timestamp(record.get("started_at"))
+            active = bool(started_at is not None and started_at >= configured_at)
+            previous = modules.get(module)
+            if previous is None or active:
+                modules[module] = {
+                    "active": active,
+                    "pid": record.get("pid"),
+                    "started_at": record.get("started_at"),
+                }
+            if active:
+                expected[module] = True
+    state["modules"] = modules
+    state["enabled"] = all(expected.values())
+    if state["enabled"]:
+        state["activation_state"] = "active"
+    elif modules:
+        state["activation_state"] = "partial"
+    return state
 
 
 def enabled(value: str | None) -> bool:
@@ -358,6 +454,9 @@ def access_guide_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if level5_state == "active":
             whole_computer_message = "Level 5 is active. Spark should still prefer the safe workspace unless a task really needs the whole computer."
             whole_computer_action = "spark access status --level 5"
+        elif level5_state == "active_for_services":
+            whole_computer_message = "Level 5 is active for Telegram and Spawner. This shell has not loaded Level 5 env, so use Spark services for operator work."
+            whole_computer_action = "spark access status --level 5"
         elif level5_state == "session_only":
             whole_computer_message = "Level 5 is active only in this process. Run setup to persist it before relying on it after restart."
             whole_computer_action = "spark access setup --level 5 --enable-high-agency"
@@ -405,7 +504,7 @@ def access_automation_payload(
     level5_activation_state: str,
     docker_ready: bool,
 ) -> dict[str, Any]:
-    level5_configured = level >= 5 and level5_activation_state in {"active", "restart_required", "session_only"}
+    level5_configured = level >= 5 and level5_activation_state in {"active", "active_for_services", "restart_required", "session_only"}
     return {
         "no_terminal_required": True,
         "ui_contract": "Spark UI/Telegram/installer surfaces may run these fixed Spark CLI actions for nontechnical users after showing the policy-authored confirmation text.",
@@ -585,11 +684,16 @@ def access_lane_payload(
         and enabled(generated_env.get("SPARK_ALLOW_EXTERNAL_PROJECT_PATHS"))
         and generated_env.get("SPARK_CODEX_SANDBOX") == "danger-full-access"
     )
-    level5_enabled = level5_process_enabled and level5_external_paths and level5_full_sandbox
+    level5_process_active = level5_process_enabled and level5_external_paths and level5_full_sandbox
+    level5_service_state = level5_service_guardrail_state(home=home, env=env_values, configured=level5_configured)
+    level5_service_active = bool(level5_service_state.get("enabled"))
+    level5_enabled = level5_process_active or level5_service_active
     level5_restart_required = level5_configured and not level5_enabled
-    if level5_enabled and level5_configured:
+    if level5_process_active and level5_configured:
         level5_activation_state = "active"
-    elif level5_enabled:
+    elif level5_service_active:
+        level5_activation_state = "active_for_services"
+    elif level5_process_active:
         level5_activation_state = "session_only"
     elif level5_restart_required:
         level5_activation_state = "restart_required"
@@ -674,7 +778,7 @@ def access_lane_payload(
     if level >= 5:
         operator_action = (
             "spark access status --level 5"
-            if level5_activation_state == "active"
+            if level5_activation_state in {"active", "active_for_services"}
             else "spark access setup --level 5 --enable-high-agency"
             if level5_activation_state == "session_only"
             else "spark restart"
@@ -692,6 +796,8 @@ def access_lane_payload(
                 "user_message": (
                     "Whole-computer mode is enabled and persisted, but Spark should still prefer a sandbox."
                     if level5_activation_state == "active"
+                    else "Whole-computer mode is active for Telegram and Spawner. This shell has not loaded Level 5 env, so use Spark services for operator work."
+                    if level5_activation_state == "active_for_services"
                     else "Whole-computer mode is active only for this process. Run setup to persist the guardrails."
                     if level5_activation_state == "session_only"
                     else "Whole-computer mode is configured; restart Spark so Telegram and Spawner load the guardrails."
@@ -713,7 +819,7 @@ def access_lane_payload(
         next_action = "spark restart"
     elif level >= 5 and level5_activation_state == "session_only":
         next_action = "spark access setup --level 5 --enable-high-agency"
-    elif level >= 5 and level5_activation_state == "active":
+    elif level >= 5 and level5_activation_state in {"active", "active_for_services"}:
         next_action = "spark access status --level 5"
     elif level >= 5 and not level5_enabled and not level5_restart_required:
         next_action = "spark access setup --level 5 --enable-high-agency"
@@ -738,6 +844,9 @@ def access_lane_payload(
             "configured": level5_configured,
             "activation_state": level5_activation_state,
             "process_enabled": level5_process_enabled,
+            "current_process_enabled": level5_process_active,
+            "service_enabled": level5_service_active,
+            "service_guardrails": level5_service_state,
             "external_paths": level5_external_paths,
             "codex_sandbox": env_values.get("SPARK_CODEX_SANDBOX") or "workspace-write",
             "configured_codex_sandbox": generated_env.get("SPARK_CODEX_SANDBOX") or "",
@@ -752,6 +861,8 @@ def access_lane_payload(
             "activation_state": level5_activation_state if level >= 5 else "workspace",
             "requires_restart": bool(level >= 5 and level5_restart_required),
             "can_operate_whole_computer": bool(level >= 5 and level5_enabled),
+            "current_process_can_operate_whole_computer": bool(level >= 5 and level5_process_active),
+            "service_can_operate_whole_computer": bool(level >= 5 and level5_service_active),
             "persistent": bool(level >= 5 and level5_enabled and level5_configured),
         },
         "setup_ran": setup,

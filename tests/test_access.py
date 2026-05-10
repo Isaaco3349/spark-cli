@@ -224,6 +224,46 @@ class AccessSetupTests(unittest.TestCase):
         self.assertTrue(payload["state_machine"]["persistent"])
         self.assertEqual(payload["recommended"]["id"], "level5_operator")
 
+    def test_access_status_level5_active_when_services_restarted_after_guardrail_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            spark_home = Path(tmpdir) / "spark-home"
+            self.run_access("setup", "--level", "5", "--enable-high-agency", spark_home=spark_home)
+            state_dir = spark_home / "state"
+            state_dir.mkdir(parents=True)
+            (state_dir / "pids.json").write_text(
+                json.dumps(
+                    {
+                        "spawner-ui": {
+                            "pid": 111,
+                            "module": "spawner-ui",
+                            "started_at": "2999-01-01T00:00:00Z",
+                        },
+                        "spark-telegram-bot:spark-agi": {
+                            "pid": 222,
+                            "module": "spark-telegram-bot",
+                            "started_at": "2999-01-01T00:00:00Z",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            exit_code, payload = self.run_access("status", "--level", "5", spark_home=spark_home)
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["level5"]["enabled"])
+        self.assertTrue(payload["level5"]["configured"])
+        self.assertFalse(payload["level5"]["current_process_enabled"])
+        self.assertTrue(payload["level5"]["service_enabled"])
+        self.assertFalse(payload["level5"]["restart_required"])
+        self.assertEqual(payload["level5"]["activation_state"], "active_for_services")
+        self.assertEqual(payload["effective_access_level"], 5)
+        self.assertTrue(payload["state_machine"]["can_operate_whole_computer"])
+        self.assertFalse(payload["state_machine"]["current_process_can_operate_whole_computer"])
+        self.assertTrue(payload["state_machine"]["service_can_operate_whole_computer"])
+        self.assertEqual(payload["next"], "spark access status --level 5")
+        self.assertEqual(payload["recommended"]["id"], "level5_operator")
+
     def test_access_status_level5_session_only_needs_persistent_setup(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             exit_code, payload = self.run_access(
