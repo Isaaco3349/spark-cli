@@ -6,7 +6,7 @@ import re
 import sqlite3
 import subprocess
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -937,6 +937,8 @@ def inspect_builder_trace_health(builder_home: Path) -> dict[str, Any]:
                     "select count(distinct trace_ref) from builder_events where trace_ref is not null and trim(trace_ref) != ''"
                 ).fetchone()[0]
                 out["trace_group_count"] = int(trace_group_count)
+                if "created_at" in columns:
+                    out["recent_windows"] = _builder_trace_recent_windows(conn)
                 group_columns = [
                     column
                     for column in ("component", "event_type", "status", "severity", "target_surface", "evidence_lane")
@@ -1004,6 +1006,39 @@ def inspect_builder_trace_health(builder_home: Path) -> dict[str, Any]:
     except Exception as exc:
         out["error"] = f"{type(exc).__name__}: {exc}"
     return out
+
+
+def _builder_trace_recent_windows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    windows = (("1h", timedelta(hours=1)), ("24h", timedelta(hours=24)), ("7d", timedelta(days=7)))
+    rows: list[dict[str, Any]] = []
+    for label, delta in windows:
+        threshold = (now - delta).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        total = conn.execute(
+            "select count(*) from builder_events where created_at >= ?",
+            (threshold,),
+        ).fetchone()[0]
+        missing = conn.execute(
+            """
+            select count(*)
+            from builder_events
+            where created_at >= ?
+              and (trace_ref is null or trim(trace_ref) = '')
+            """,
+            (threshold,),
+        ).fetchone()[0]
+        total_count = int(total or 0)
+        missing_count = int(missing or 0)
+        rows.append(
+            {
+                "window": label,
+                "threshold": threshold,
+                "row_count": total_count,
+                "missing_trace_ref_count": missing_count,
+                "missing_trace_ref_ratio": round(missing_count / total_count, 4) if total_count else 0.0,
+            }
+        )
+    return rows
 
 
 def build_modules(

@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
 
@@ -302,6 +303,7 @@ class SparkSystemMapTests(unittest.TestCase):
                     ("evt-orphan", "recorded", "medium", "router", "telegram", "req-2", "trace-2", "missing-parent"),
                     ("evt-open", "open", "high", "answer", "telegram", None, None, None),
                 ]
+                created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                 for event_id, status, severity, component, target_surface, request_id, trace_ref, parent_id in rows:
                     conn.execute(
                         """
@@ -312,7 +314,7 @@ class SparkSystemMapTests(unittest.TestCase):
                         """,
                         (
                             event_id,
-                            "2026-05-10T13:00:00Z",
+                            created_at,
                             "route_selected",
                             status,
                             severity,
@@ -339,6 +341,8 @@ class SparkSystemMapTests(unittest.TestCase):
         self.assertEqual(health["high_severity_open_count"], 1)
         self.assertEqual(health["missing_trace_ref_sources"]["rows"][0]["component"], "answer")
         self.assertEqual(health["missing_trace_ref_sources"]["rows"][0]["event_count"], 1)
+        self.assertEqual(health["recent_windows"][0]["row_count"], 4)
+        self.assertEqual(health["recent_windows"][0]["missing_trace_ref_count"], 1)
         self.assertIn("missing_trace_refs", health["health_flags"])
         self.assertNotIn("private health summary", encoded)
         self.assertNotIn("private health body", encoded)
