@@ -8,7 +8,7 @@ from io import StringIO
 from pathlib import Path
 
 from spark_cli.cli import build_parser
-from spark_cli.system_map import count_safe_jsonl, summarize_pids, summarize_setup
+from spark_cli.system_map import build_memory_movement_index, count_safe_jsonl, summarize_pids, summarize_setup
 
 
 class SparkSystemMapTests(unittest.TestCase):
@@ -76,6 +76,43 @@ class SparkSystemMapTests(unittest.TestCase):
         self.assertTrue(summary[0]["command_configured"])
         self.assertNotIn("secret-value", encoded)
         self.assertNotIn("--token", encoded)
+
+    def test_memory_movement_index_uses_status_allowlist_and_counts_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            builder_home = Path(tmp) / "spark-intelligence"
+            status_dir = builder_home / "artifacts" / "memory-movement-index"
+            current_state = builder_home / "artifacts" / "spark-memory-kb" / "wiki" / "current-state"
+            status_dir.mkdir(parents=True)
+            current_state.mkdir(parents=True)
+            (status_dir / "memory-movement-status.json").write_text(
+                json.dumps(
+                    {
+                        "status": "supported",
+                        "movement_counts": {"accepted": 3, "quarantined": 1},
+                        "row_count": 4,
+                        "authority": "current_state_authoritative",
+                        "rows": [{"raw_text": "My private fact", "token": "telegram-token-value"}],
+                        "subject": "human private subject",
+                        "value": "private value",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (current_state / "human-telegram-123-profile-preferred-name.md").write_text(
+                "My private fact",
+                encoding="utf-8",
+            )
+
+            index = build_memory_movement_index(builder_home)
+
+        encoded = json.dumps(index)
+        self.assertEqual(index["safe_status_export"]["status"]["status"], "supported")
+        self.assertEqual(index["safe_status_export"]["status"]["movement_counts"]["accepted"], 3)
+        self.assertEqual(index["memory_kb_artifacts"]["lane_counts"]["current_state"]["file_count"], 1)
+        self.assertGreater(index["safe_status_export"]["raw_hint_key_count"], 0)
+        self.assertNotIn("My private fact", encoded)
+        self.assertNotIn("telegram-token-value", encoded)
+        self.assertNotIn("human-telegram-123-profile-preferred-name", encoded)
 
     def test_os_compile_command_writes_redacted_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -175,6 +212,7 @@ routes = []
             self.assertTrue((out / "authority-view.json").exists())
             self.assertTrue((out / "capability-catalog.json").exists())
             self.assertTrue((out / "trace-index.json").exists())
+            self.assertTrue((out / "memory-movement-index.json").exists())
             self.assertNotIn("telegram.bot_token", output_text)
             self.assertNotIn("webhook_url", output_text)
 

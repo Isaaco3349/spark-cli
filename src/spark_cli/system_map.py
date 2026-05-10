@@ -15,6 +15,7 @@ SYSTEM_MAP_SCHEMA = "spark.system_map.compiled.v0"
 AUTHORITY_VIEW_SCHEMA = "spark.authority_view.compiled.v0"
 CAPABILITY_CATALOG_SCHEMA = "spark.capability_catalog.compiled.v0"
 TRACE_INDEX_SCHEMA = "spark.trace_index.compiled.v0"
+MEMORY_MOVEMENT_INDEX_SCHEMA = "spark.memory_movement_index.compiled.v0"
 
 SPARK_REPO_NAME_HINTS = ("spark", "domain-chip", "spawner-ui")
 
@@ -60,6 +61,39 @@ SAFE_JSONL_COUNT_KEYS = (
     "decision",
     "route",
     "surface",
+)
+
+SAFE_MEMORY_STATUS_KEYS = {
+    "status",
+    "reason",
+    "configured_module",
+    "contract_name",
+    "authority",
+    "movement_states",
+    "movement_counts",
+    "row_count",
+    "record_counts",
+    "source_family_counts",
+    "authority_counts",
+    "non_override_rules",
+}
+
+RAW_MEMORY_KEY_HINTS = (
+    "content",
+    "evidence",
+    "fact",
+    "message",
+    "object",
+    "predicate",
+    "prompt",
+    "raw",
+    "response",
+    "row",
+    "secret",
+    "subject",
+    "text",
+    "token",
+    "value",
 )
 
 
@@ -433,6 +467,206 @@ def inspect_json_shape(path: Path) -> dict[str, Any]:
     return out
 
 
+def inspect_file_metadata(path: Path) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "redaction": "filesystem metadata only; file body not read",
+    }
+    if not path.exists():
+        return out
+    try:
+        stat = path.stat()
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        return out
+    out["size_bytes"] = int(stat.st_size)
+    out["modified_at"] = (
+        datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    )
+    return out
+
+
+def safe_short_string(value: str, limit: int = 240) -> str:
+    cleaned = re.sub(r"(?i)(api[_-]?key|token|secret)([=:\s]+)(\S+)", r"\1\2[redacted]", value.strip())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 3] + "..."
+
+
+def key_has_raw_memory_hint(key: Any) -> bool:
+    lowered = str(key).lower()
+    return any(hint in lowered for hint in RAW_MEMORY_KEY_HINTS)
+
+
+def safe_memory_status_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > 4:
+        return "[depth-limit]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return safe_short_string(value)
+    if isinstance(value, list):
+        return [safe_memory_status_value(item, depth=depth + 1) for item in value[:50]]
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in list(value.items())[:80]:
+            if key_has_raw_memory_hint(key):
+                continue
+            out[str(key)[:120]] = safe_memory_status_value(item, depth=depth + 1)
+        return out
+    return str(type(value).__name__)
+
+
+def count_raw_memory_hint_keys(value: Any) -> int:
+    if isinstance(value, dict):
+        count = sum(1 for key in value.keys() if key_has_raw_memory_hint(key))
+        return count + sum(count_raw_memory_hint_keys(item) for item in value.values())
+    if isinstance(value, list):
+        return sum(count_raw_memory_hint_keys(item) for item in value)
+    return 0
+
+
+def read_memory_movement_status_export(builder_home: Path) -> dict[str, Any]:
+    path = builder_home / "artifacts" / "memory-movement-index" / "memory-movement-status.json"
+    data, error = read_json(path)
+    out: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "redaction": "allowlisted status fields only; rows, raw memory text, and evidence bodies omitted",
+    }
+    if error and error != "missing":
+        out["error"] = error
+        return out
+    if not isinstance(data, dict):
+        return out
+
+    allowed: dict[str, Any] = {}
+    for key in sorted(SAFE_MEMORY_STATUS_KEYS):
+        if key in data:
+            allowed[key] = safe_memory_status_value(data[key])
+    out["status"] = allowed
+    out["omitted_top_level_keys"] = sorted(str(key) for key in data.keys() if key not in SAFE_MEMORY_STATUS_KEYS)[:80]
+    out["raw_hint_key_count"] = count_raw_memory_hint_keys(data)
+    return out
+
+
+def count_files_under(path: Path, *, max_files: int = 5000) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "path": str(path),
+        "exists": path.exists(),
+        "redaction": "counts only; file names and file bodies omitted",
+    }
+    if not path.exists():
+        return out
+
+    file_count = 0
+    dir_count = 0
+    extension_counts: Counter[str] = Counter()
+    try:
+        for child in path.rglob("*"):
+            if child.is_dir():
+                dir_count += 1
+                continue
+            if not child.is_file():
+                continue
+            file_count += 1
+            suffix = child.suffix.lower() or "[none]"
+            extension_counts[suffix] += 1
+            if file_count >= max_files:
+                out["max_files_reached"] = True
+                break
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        return out
+
+    out["file_count"] = file_count
+    out["dir_count"] = dir_count
+    out["extension_counts"] = dict(sorted(extension_counts.items()))
+    return out
+
+
+def summarize_memory_kb_artifacts(builder_home: Path) -> dict[str, Any]:
+    root = builder_home / "artifacts" / "spark-memory-kb"
+    summary = count_files_under(root)
+    if not root.exists():
+        return summary
+
+    lanes = {
+        "current_state": root / "wiki" / "current-state",
+        "events": root / "wiki" / "events",
+        "sources": root / "wiki" / "sources",
+        "syntheses": root / "wiki" / "syntheses",
+    }
+    summary["lane_counts"] = {name: count_files_under(path) for name, path in lanes.items()}
+    summary["compile_latest_metadata"] = inspect_file_metadata(builder_home / "artifacts" / "spark-memory-kb-compile-latest.json")
+    summary["sdk_state_metadata"] = inspect_file_metadata(builder_home / "artifacts" / "domain_chip_memory_sdk_state.json")
+    return summary
+
+
+def summarize_memory_run_artifacts(builder_home: Path) -> dict[str, Any]:
+    artifacts = builder_home / "artifacts"
+    prefixes = (
+        "supervised-memory-qa",
+        "telegram-memory-gauntlet",
+        "telegram-memory-acceptance",
+    )
+    out: dict[str, Any] = {
+        "path": str(artifacts),
+        "exists": artifacts.exists(),
+        "redaction": "run directory counts and timestamps only; run names and payloads omitted",
+        "prefixes": {},
+    }
+    if not artifacts.exists():
+        return out
+
+    try:
+        for prefix in prefixes:
+            runs = [child for child in artifacts.iterdir() if child.is_dir() and child.name.startswith(prefix)]
+            latest_mtime = max((child.stat().st_mtime for child in runs), default=None)
+            out["prefixes"][prefix] = {
+                "run_count": len(runs),
+                "latest_modified_at": (
+                    datetime.fromtimestamp(latest_mtime, timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                    if latest_mtime is not None
+                    else None
+                ),
+            }
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
+def inspect_builder_memory_tables(builder_home: Path) -> dict[str, Any]:
+    db_path = builder_home / "state.db"
+    out: dict[str, Any] = {
+        "path": str(db_path),
+        "exists": db_path.exists(),
+        "redaction": "memory-related table names and row counts only; no row contents read",
+    }
+    if not db_path.exists():
+        return out
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            tables = [row[0] for row in conn.execute("select name from sqlite_master where type='table' order by name")]
+            memory_tables = [table for table in tables if "memory" in table.lower()]
+            out["table_count"] = len(memory_tables)
+            out["tables"] = {}
+            for table in memory_tables:
+                count = conn.execute(f'select count(*) from "{table}"').fetchone()[0]
+                out["tables"][table] = {"row_count": int(count)}
+        finally:
+            conn.close()
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
 def inspect_builder_event_trace(builder_home: Path) -> dict[str, Any]:
     db_path = builder_home / "state.db"
     out: dict[str, Any] = {
@@ -642,6 +876,28 @@ def build_trace_index(spark_home: Path, builder_home: Path) -> dict[str, Any]:
     }
 
 
+def build_memory_movement_index(builder_home: Path) -> dict[str, Any]:
+    return {
+        "schema_version": MEMORY_MOVEMENT_INDEX_SCHEMA,
+        "generated_at": utc_now(),
+        "authority": "observability_non_authoritative",
+        "redaction": (
+            "metadata-only memory movement index; no raw memory text, row bodies, profile facts, "
+            "conversation turns, evidence payloads, or Telegram update payloads emitted"
+        ),
+        "builder_memory_tables": inspect_builder_memory_tables(builder_home),
+        "safe_status_export": read_memory_movement_status_export(builder_home),
+        "memory_kb_artifacts": summarize_memory_kb_artifacts(builder_home),
+        "memory_run_artifacts": summarize_memory_run_artifacts(builder_home),
+        "next_required_bridges": [
+            "Have Builder write artifacts/memory-movement-index/memory-movement-status.json from inspect_memory_movement_status().",
+            "Have domain-chip-memory expose movement counts by lane, authority, source family, and record type without record text.",
+            "Join memory movement events to trace ids once Builder event envelopes carry stable trace refs.",
+            "Promote this index into Builder AOC and cockpit as evidence only, never as instructions or profile truth.",
+        ],
+    }
+
+
 def build_gaps(system_map: dict[str, Any]) -> list[dict[str, str]]:
     registry_modules = set(as_dict(system_map.get("registry", {}).get("modules")).keys())
     installed_modules = set(as_dict(system_map.get("installed_modules")).keys())
@@ -744,6 +1000,7 @@ def compile_system_map(desktop: Path, spark_home: Path, registry_path: Path) -> 
         "authority_view": build_authority_view(desktop, setup_summary),
         "capability_catalog": build_capability_catalog(repos),
         "trace_index": build_trace_index(spark_home, builder_home),
+        "memory_movement_index": build_memory_movement_index(builder_home),
     }
 
 
@@ -783,7 +1040,7 @@ def write_gaps_markdown(path: Path, gaps: list[dict[str, str]], system_map: dict
             "",
             "1. Promote this generated map into Builder's AOC panel as a read-only source.",
             "2. Deepen trace-index compilation from aggregate counts into redacted trace drilldowns.",
-            "3. Add memory movement index compilation from Builder and domain-chip-memory ledgers.",
+            "3. Have Builder publish a safe memory movement status export for the compiler to ingest.",
             "4. Add per-gap owner assignment before any runtime behavior changes.",
             "",
         ]
@@ -799,12 +1056,14 @@ def write_compiled_outputs(out_dir: Path, compiled: dict[str, Any]) -> dict[str,
         "authority_view": out_dir / "authority-view.json",
         "capability_catalog": out_dir / "capability-catalog.json",
         "trace_index": out_dir / "trace-index.json",
+        "memory_movement_index": out_dir / "memory-movement-index.json",
         "gaps": out_dir / "gaps.md",
     }
     write_json(paths["system_map"], system_map)
     write_json(paths["authority_view"], compiled["authority_view"])
     write_json(paths["capability_catalog"], compiled["capability_catalog"])
     write_json(paths["trace_index"], compiled["trace_index"])
+    write_json(paths["memory_movement_index"], compiled["memory_movement_index"])
     write_gaps_markdown(paths["gaps"], as_list(system_map.get("gaps")), system_map)
     return {key: str(path) for key, path in paths.items()}
 
@@ -813,7 +1072,10 @@ def compile_summary(compiled: dict[str, Any], written: dict[str, str] | None = N
     system_map = as_dict(compiled["system_map"])
     capability_catalog = as_dict(compiled["capability_catalog"])
     trace_index = as_dict(compiled["trace_index"])
+    memory_index = as_dict(compiled["memory_movement_index"])
     builder_events = as_dict(trace_index.get("builder_events"))
+    memory_status = as_dict(as_dict(memory_index.get("safe_status_export")).get("status"))
+    builder_memory_tables = as_dict(memory_index.get("builder_memory_tables"))
     return {
         "schema_version": "spark.os_compile.summary.v0",
         "generated_at": system_map.get("generated_at"),
@@ -827,6 +1089,9 @@ def compile_summary(compiled: dict[str, Any], written: dict[str, str] | None = N
             for key, value in as_dict(as_dict(compiled["authority_view"]).get("observed_sources")).items()
         },
         "builder_event_rows": builder_events.get("row_count"),
+        "memory_movement_status": memory_status.get("status"),
+        "memory_movement_rows": memory_status.get("row_count"),
+        "builder_memory_table_count": builder_memory_tables.get("table_count"),
         "privacy": system_map.get("privacy"),
         "outputs": written or {},
     }
