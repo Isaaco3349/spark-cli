@@ -242,7 +242,8 @@ class SparkSystemMapTests(unittest.TestCase):
         self.assertEqual(builder_item["evidence_details"]["canonical_release"]["aoc_command_marker_count"], 6)
         self.assertTrue(builder_item["evidence_details"]["canonical_release"]["trace_ref_argument_present"])
         self.assertEqual(
-            builder_item["evidence_details"]["command_parity_probe"], "python -m spark_intelligence.cli self --help"
+            builder_item["evidence_details"]["local_source_probe"],
+            "Insert repo src on sys.path before importing spark_intelligence.cli build_parser.",
         )
         spawner_item = next(item for item in repo_board["duplicate_truths"]["items"] if item["id"] == "spawner-module-local-state-root")
         self.assertIn("State-root audit route exists", spawner_item["evidence"])

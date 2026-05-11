@@ -3432,7 +3432,7 @@ def build_duplicate_truths(system_map: dict[str, Any]) -> dict[str, Any]:
                     "desktop_owner": desktop_audit,
                     "duplicate_dirty_file_count": duplicate_dirty,
                     "onboarding_gate": "builder_runtime_source",
-                    "command_parity_probe": "python -m spark_intelligence.cli self --help",
+                    "local_source_probe": "Insert repo src on sys.path before importing spark_intelligence.cli build_parser.",
                 },
             )
         )
