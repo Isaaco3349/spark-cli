@@ -3848,16 +3848,33 @@ def build_duplicate_truths(system_map: dict[str, Any]) -> dict[str, Any]:
         )
         if spawner_audit.get("cwd_spawner_fallback_gated_by_spark_home"):
             fallback_evidence = " Source still contains a cwd .spawner fallback, gated behind SPARK_HOME state fallback."
+            spawner_classification = "active_legacy_gated"
+            spawner_severity = "warning"
+            spawner_next_action = (
+                "Keep module-local state read-only and warning-only. Before archive, run a source-reference scan, "
+                "two clean compiles, and one live trace proof showing no runtime read/write dependency."
+            )
         elif spawner_audit.get("cwd_spawner_fallback_present"):
             fallback_evidence = " Source still contains a cwd .spawner fallback."
+            spawner_classification = "active_legacy"
+            spawner_severity = "critical"
+            spawner_next_action = (
+                "Keep module-local state read-only and warning-only. Before archive, replace or gate the cwd .spawner fallback, "
+                "then rerun source-reference scan, two clean compiles, and one live trace proof."
+            )
         else:
             fallback_evidence = " No cwd .spawner fallback was detected in the state helper."
+            spawner_classification = "active_legacy_gated"
+            spawner_severity = "warning"
+            spawner_next_action = (
+                "Keep module-local state read-only and warning-only. Before archive, run two clean compiles and one live trace proof."
+            )
         items.append(
             duplicate_truth_item(
                 item_id="spawner-module-local-state-root",
                 fact="Spawner mission state root",
-                classification="active_legacy",
-                severity="critical",
+                classification=spawner_classification,
+                severity=spawner_severity,
                 owner_repo="spawner-ui",
                 canonical_path=str(spawner_state),
                 duplicate_path=str(spawner_local_state),
@@ -3867,10 +3884,7 @@ def build_duplicate_truths(system_map: dict[str, Any]) -> dict[str, Any]:
                     + fallback_evidence
                 ),
                 risk="Old mission files can be mistaken for current mission truth.",
-                next_safe_action=(
-                    "Keep module-local state read-only and warning-only. Before archive, replace or gate the cwd .spawner fallback, "
-                    "then rerun source-reference scan, two clean compiles, and one live trace proof."
-                ),
+                next_safe_action=spawner_next_action,
                 verification_command="Invoke-WebRequest http://127.0.0.1:3333/api/system/state-root; rg -n \"\\\\.spawner|SPAWNER_STATE|stateDir\" src scripts",
                 rollback="Leave module-local state untouched and read-only until current runtime no longer reads or writes it.",
                 evidence_details=spawner_audit,

@@ -300,8 +300,11 @@ class SparkSystemMapTests(unittest.TestCase):
             "Insert repo src on sys.path before importing spark_intelligence.cli build_parser.",
         )
         spawner_item = next(item for item in repo_board["duplicate_truths"]["items"] if item["id"] == "spawner-module-local-state-root")
+        self.assertEqual(spawner_item["classification"], "active_legacy_gated")
+        self.assertEqual(spawner_item["severity"], "warning")
         self.assertIn("State-root audit route exists", spawner_item["evidence"])
         self.assertIn("cwd .spawner fallback", spawner_item["evidence"])
+        self.assertNotIn("replace or gate", spawner_item["next_safe_action"])
         self.assertTrue(spawner_item["evidence_details"]["module_local_state_exists"])
         self.assertTrue(spawner_item["evidence_details"]["state_root_audit_route_exists"])
         self.assertTrue(spawner_item["evidence_details"]["configured_state_env_supported"])
