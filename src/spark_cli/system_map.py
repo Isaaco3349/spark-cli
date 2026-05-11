@@ -23,6 +23,7 @@ MEMORY_REVIEW_QUEUE_SCHEMA = "spark.memory_review_queue.v1"
 REPO_BOARD_SCHEMA = "spark.repo_board.compiled.v0"
 VOICE_SURFACE_SCHEMA = "spark.voice_surface_view.compiled.v0"
 OPERATING_COCKPIT_SCHEMA = "spark.operating_cockpit.compiled.v0"
+DUPLICATE_TRUTHS_SCHEMA = "spark.duplicate_truths.compiled.v0"
 
 SPARK_REPO_NAME_HINTS = ("spark", "domain-chip", "spawner-ui")
 
@@ -3290,6 +3291,219 @@ def repo_risk_class(name: str, release_eligibility: str) -> str:
     return "low"
 
 
+def repo_by_name(system_map: dict[str, Any], name: str) -> dict[str, Any]:
+    for repo in as_list(system_map.get("discovered_repos")):
+        repo = as_dict(repo)
+        if repo.get("name") == name:
+            return repo
+    return {}
+
+
+def duplicate_truth_item(
+    *,
+    item_id: str,
+    fact: str,
+    classification: str,
+    owner_repo: str,
+    canonical_path: str,
+    duplicate_path: str,
+    evidence: str,
+    risk: str,
+    next_safe_action: str,
+    verification_command: str,
+    rollback: str,
+    severity: str = "warning",
+) -> dict[str, Any]:
+    return {
+        "id": item_id,
+        "fact": fact,
+        "classification": classification,
+        "severity": severity,
+        "owner_repo": owner_repo,
+        "canonical_path": canonical_path,
+        "duplicate_path": duplicate_path,
+        "evidence": evidence,
+        "risk": risk,
+        "next_safe_action": next_safe_action,
+        "verification_command": verification_command,
+        "rollback": rollback,
+    }
+
+
+def git_dirty_from_repo(repo: dict[str, Any]) -> tuple[int, int]:
+    git = as_dict(repo.get("git"))
+    dirty = int(git.get("dirty_tracked_count") or 0)
+    untracked = int(git.get("untracked_count") or 0)
+    if dirty or untracked:
+        return dirty, untracked
+    path = repo.get("path")
+    if isinstance(path, str) and path.strip():
+        status = git_board_status(Path(path))
+        return int(status.get("dirty_tracked_count") or 0), int(status.get("untracked_count") or 0)
+    return 0, 0
+
+
+def build_duplicate_truths(system_map: dict[str, Any]) -> dict[str, Any]:
+    source_roots = as_dict(system_map.get("source_roots"))
+    spark_home = Path(str(source_roots.get("spark_home") or "")).expanduser()
+    desktop = Path(str(source_roots.get("desktop") or "")).expanduser()
+    installed_modules = as_dict(system_map.get("installed_modules"))
+    items: list[dict[str, Any]] = []
+
+    builder_installed = as_dict(installed_modules.get("spark-intelligence-builder"))
+    builder_canonical = first_string(builder_installed.get("path"), builder_installed.get("source"))
+    builder_nonrelease = spark_home / "modules" / "spark-intelligence-builder" / "source"
+    if builder_canonical and builder_nonrelease.exists() and str(builder_nonrelease) != builder_canonical:
+        items.append(
+            duplicate_truth_item(
+                item_id="builder-release-vs-nonrelease-installed-source",
+                fact="Builder runtime source used by Telegram",
+                classification="active_legacy",
+                severity="critical",
+                owner_repo="spark-intelligence-builder",
+                canonical_path=builder_canonical,
+                duplicate_path=str(builder_nonrelease),
+                evidence="Installed module metadata points at one Builder source while another installed-looking Builder source exists.",
+                risk="Operators can patch the non-canonical source and believe Telegram is using it.",
+                next_safe_action="Compare the sources, port only proven missing behavior into the release install, then demote the duplicate after proof.",
+                verification_command="spark verify --onboarding --json",
+                rollback="Keep the duplicate source read-only until release install proof remains green.",
+            )
+        )
+
+    spawner_installed = as_dict(installed_modules.get("spawner-ui"))
+    spawner_source_raw = first_string(spawner_installed.get("path"), spawner_installed.get("source"))
+    spawner_source = Path(spawner_source_raw) if spawner_source_raw else Path()
+    spawner_state = spark_home / "state" / "spawner-ui"
+    spawner_local_state = spawner_source / ".spawner" if spawner_source_raw else Path()
+    if spawner_source_raw and spawner_local_state.exists():
+        items.append(
+            duplicate_truth_item(
+                item_id="spawner-module-local-state-root",
+                fact="Spawner mission state root",
+                classification="active_legacy",
+                severity="critical",
+                owner_repo="spawner-ui",
+                canonical_path=str(spawner_state),
+                duplicate_path=str(spawner_local_state),
+                evidence="Current compiler and proof artifacts use spark-home state while module-local Spawner state also exists.",
+                risk="Old mission files can be mistaken for current mission truth.",
+                next_safe_action="Audit current Spawner source for .spawner reads/writes; add warnings before any archive.",
+                verification_command="rg -n \"\\\\.spawner|SPAWNER_STATE|stateDir\" src scripts",
+                rollback="Leave module-local state untouched and read-only until current runtime no longer reads or writes it.",
+            )
+        )
+
+    for repo_name, fact, owner, classification in [
+        ("spark-intelligence-builder", "Builder owner repo curation state", "spark-intelligence-builder", "owner_repo_dirty"),
+        ("spark-telegram-bot", "Telegram owner repo curation state", "spark-telegram-bot", "owner_repo_dirty"),
+        ("spawner-ui", "Spawner owner repo curation state", "spawner-ui", "owner_repo_dirty"),
+        ("domain-chip-memory", "Memory substrate owner repo curation state", "domain-chip-memory", "owner_repo_dirty"),
+        ("spark-memory-quality-dashboard", "Memory dashboard projection state", "spark-memory-quality-dashboard", "projection_dirty"),
+    ]:
+        repo = repo_by_name(system_map, repo_name)
+        if not repo:
+            continue
+        dirty, untracked = git_dirty_from_repo(repo)
+        if dirty or untracked:
+            items.append(
+                duplicate_truth_item(
+                    item_id=f"{repo_name}-dirty-owner-repo",
+                    fact=fact,
+                    classification=classification,
+                    owner_repo=owner,
+                    canonical_path=str(repo.get("path") or ""),
+                    duplicate_path="",
+                    evidence=f"Repo board reports {dirty} tracked and {untracked} untracked local changes.",
+                    risk="Dirty source can be mistaken for released or installed truth before curation.",
+                    next_safe_action="Curate the worktree by feature family before merge, release, or cleanup.",
+                    verification_command="git status --short --branch",
+                    rollback="Do not revert unrelated work; leave the worktree intact until source-owner curation.",
+                    severity="warning" if owner not in {"spark-intelligence-builder", "spark-telegram-bot", "spawner-ui"} else "critical",
+                )
+            )
+
+    for module_id, fact in [
+        ("spark-telegram-bot", "Telegram installed runtime source"),
+        ("spawner-ui", "Spawner installed runtime source"),
+    ]:
+        installed = as_dict(installed_modules.get(module_id))
+        installed_path_raw = first_string(installed.get("path"), installed.get("source"))
+        if installed_path_raw:
+            installed_path = Path(installed_path_raw)
+            installed_repo = collect_repo_metadata(installed_path)
+            dirty, untracked = git_dirty_from_repo(installed_repo)
+            if dirty or untracked:
+                items.append(
+                    duplicate_truth_item(
+                        item_id=f"{module_id}-dirty-installed-runtime",
+                        fact=fact,
+                        classification="canonical_runtime_dirty",
+                        severity="critical",
+                        owner_repo=module_id,
+                        canonical_path=str(installed_path),
+                        duplicate_path="",
+                        evidence=f"Running installed source has {dirty} tracked and {untracked} untracked local changes.",
+                        risk="The current runtime can drift from owner repo, registry, and hosted installer truth.",
+                        next_safe_action="Commit or port the minimum live-proof changes into the owner repo and release line.",
+                        verification_command="git status --short --branch",
+                        rollback="Keep runtime running from installed source until curated release proof passes.",
+                    )
+                )
+
+    browser_extension = repo_by_name(system_map, "spark-browser-extension")
+    if browser_extension:
+        items.append(
+            duplicate_truth_item(
+                item_id="spark-browser-extension-planning-residue",
+                fact="Browser/computer-use capability lane",
+                classification="deprecated",
+                owner_repo="spark-cli",
+                canonical_path="browser-use lane through spark-cli authority policy",
+                duplicate_path=str(browser_extension.get("path") or ""),
+                evidence="Browser extension repo exists but current Spark plan uses browser-use through CLI authority and trace metadata.",
+                risk="Old extension language can reintroduce a parallel capability surface.",
+                next_safe_action="Keep browser-extension references historical; route active plans through browser-use.",
+                verification_command="rg -n \"spark-browser-extension|browser extension\" docs README.md tasks.md",
+                rollback="Keep old repo untouched as history; do not route runtime through it.",
+                severity="decision",
+            )
+        )
+
+    systems_repo = repo_by_name(system_map, "spark-intelligence-systems")
+    if systems_repo:
+        items.append(
+            duplicate_truth_item(
+                item_id="spark-intelligence-systems-prototype-compiler",
+                fact="Spark OS compiler ownership",
+                classification="projection",
+                owner_repo="spark-cli",
+                canonical_path="spark-cli production compiler",
+                duplicate_path=str(systems_repo.get("path") or desktop / "spark-intelligence-systems"),
+                evidence="spark-intelligence-systems remains doctrine/runbook/prototype while production compile output is owned by spark-cli.",
+                risk="Prototype output can be mistaken for live OS truth.",
+                next_safe_action="Keep doctrine here; keep runtime read-model artifacts source-owned by spark-cli.",
+                verification_command="spark os compile",
+                rollback="If production compiler fails, use this repo only as a reference, not runtime truth.",
+                severity="decision",
+            )
+        )
+
+    counts = Counter(str(item.get("classification")) for item in items)
+    severity_counts = Counter(str(item.get("severity")) for item in items)
+    return {
+        "schema_version": DUPLICATE_TRUTHS_SCHEMA,
+        "generated_at": utc_now(),
+        "redaction": "metadata only; no diffs, env values, logs, prompts, memory bodies, transcripts, or provider output",
+        "summary": {
+            "item_count": len(items),
+            "classification_counts": dict(sorted(counts.items())),
+            "severity_counts": dict(sorted(severity_counts.items())),
+        },
+        "items": items,
+    }
+
+
 def build_repo_board(system_map: dict[str, Any]) -> dict[str, Any]:
     registry_modules = set(as_dict(system_map.get("registry", {}).get("modules")).keys())
     installed_modules = set(as_dict(system_map.get("installed_modules")).keys())
@@ -3335,6 +3549,11 @@ def build_repo_board(system_map: dict[str, Any]) -> dict[str, Any]:
         "blocked_release_count": sum(1 for row in rows if row["release_eligibility"] == "blocked"),
         "critical_repo_count": sum(1 for row in rows if row["risk_class"] == "critical"),
     }
+    duplicate_truths = build_duplicate_truths(system_map)
+    summary["duplicate_truth_count"] = as_dict(duplicate_truths.get("summary")).get("item_count", 0)
+    summary["critical_duplicate_truth_count"] = as_dict(
+        as_dict(duplicate_truths.get("summary")).get("severity_counts")
+    ).get("critical", 0)
     ranked = sorted(
         rows,
         key=lambda row: (
@@ -3358,6 +3577,7 @@ def build_repo_board(system_map: dict[str, Any]) -> dict[str, Any]:
             }
             for row in ranked[:20]
         ],
+        "duplicate_truths": duplicate_truths,
         "repos": rows,
     }
 
@@ -3576,6 +3796,7 @@ def build_operating_cockpit(compiled: dict[str, Any]) -> dict[str, Any]:
     trace_index = as_dict(compiled.get("trace_index"))
     capability_catalog = as_dict(compiled.get("capability_catalog"))
     voice_surface = as_dict(compiled.get("voice_surface_view"))
+    duplicate_truths = as_dict(repo_board.get("duplicate_truths"))
     return {
         "schema_version": OPERATING_COCKPIT_SCHEMA,
         "generated_at": utc_now(),
@@ -3598,6 +3819,7 @@ def build_operating_cockpit(compiled: dict[str, Any]) -> dict[str, Any]:
                 "schema_version": repo_board.get("schema_version"),
                 "repo_count": as_dict(repo_board.get("summary")).get("repo_count"),
                 "dirty_repo_count": as_dict(repo_board.get("summary")).get("dirty_repo_count"),
+                "duplicate_truth_count": as_dict(repo_board.get("summary")).get("duplicate_truth_count"),
             },
             "trace_index": {
                 "schema_version": trace_index.get("schema_version"),
@@ -3626,6 +3848,11 @@ def build_operating_cockpit(compiled: dict[str, Any]) -> dict[str, Any]:
         },
         "action_boundary": "Read-only until high-agency actions carry AuthorityVerdictV1 trace evidence.",
         "trace_repair_queue": as_list(trace_index.get("trace_repair_queue"))[:5],
+        "duplicate_truths": {
+            "schema_version": duplicate_truths.get("schema_version"),
+            "summary": duplicate_truths.get("summary"),
+            "items": as_list(duplicate_truths.get("items"))[:10],
+        },
         "authority_verdicts": as_list(as_dict(trace_index.get("authority_verdicts")).get("items"))[:5],
         "memory_review_queue": as_list(
             as_dict(as_dict(compiled.get("memory_movement_index")).get("memory_review_queue")).get("items")
@@ -3765,6 +3992,7 @@ def compile_summary(compiled: dict[str, Any], written: dict[str, str] | None = N
     memory_index = as_dict(compiled["memory_movement_index"])
     repo_board = as_dict(compiled.get("repo_board"))
     voice_surface = as_dict(compiled.get("voice_surface_view"))
+    duplicate_truths = as_dict(repo_board.get("duplicate_truths"))
     builder_events = as_dict(trace_index.get("builder_events"))
     builder_event_samples = as_dict(trace_index.get("builder_event_samples"))
     builder_trace_groups = as_dict(trace_index.get("builder_trace_groups"))
@@ -3794,6 +4022,7 @@ def compile_summary(compiled: dict[str, Any], written: dict[str, str] | None = N
         "memory_movement_rows": memory_status.get("row_count"),
         "builder_memory_table_count": builder_memory_tables.get("table_count"),
         "repo_board": as_dict(repo_board.get("summary")),
+        "duplicate_truths": as_dict(duplicate_truths.get("summary")),
         "voice_surface_mode": voice_surface.get("mode"),
         "voice_surface_blockers": len(as_list(voice_surface.get("blockers"))),
         "privacy": system_map.get("privacy"),

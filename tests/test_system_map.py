@@ -19,6 +19,7 @@ from spark_cli.system_map import (
     build_trace_repair_queue,
     build_voice_surface_view,
     collect_repo_metadata,
+    compile_system_map,
     count_safe_jsonl,
     inspect_builder_event_samples,
     inspect_builder_trace_health,
@@ -149,6 +150,7 @@ class SparkSystemMapTests(unittest.TestCase):
 
         self.assertEqual(board["schema_version"], "spark.repo_board.compiled.v0")
         self.assertEqual(board["repos"][0]["risk_class"], "critical")
+        self.assertEqual(board["duplicate_truths"]["schema_version"], "spark.duplicate_truths.compiled.v0")
         self.assertEqual(view["schema_version"], "spark.voice_surface_view.compiled.v0")
         self.assertEqual(view["mode"], "disabled")
         self.assertEqual(view["source_capability"]["source_mode"], "duplex")
@@ -164,6 +166,61 @@ class SparkSystemMapTests(unittest.TestCase):
         self.assertIn("not installed", " ".join(view["blockers"]))
         self.assertNotIn("README.md", encoded)
         self.assertNotIn("transcript body", encoded.lower())
+
+    def test_compile_surfaces_duplicate_truths_for_legacy_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            desktop = root / "Desktop"
+            spark_home = root / ".spark"
+            state = spark_home / "state"
+            builder_release = spark_home / "modules" / "spark-intelligence-builder-release" / "source"
+            builder_legacy = spark_home / "modules" / "spark-intelligence-builder" / "source"
+            spawner_source = spark_home / "modules" / "spawner-ui" / "source"
+            systems_repo = desktop / "spark-intelligence-systems"
+            registry = root / "registry.json"
+
+            for path in [desktop, state, builder_release, builder_legacy, spawner_source / ".spawner", systems_repo]:
+                path.mkdir(parents=True)
+            registry.write_text(
+                json.dumps(
+                    {
+                        "modules": {
+                            "spark-intelligence-builder": {"source": "https://example.test/builder"},
+                            "spawner-ui": {"source": "https://example.test/spawner"},
+                        },
+                        "bundles": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (state / "installed.json").write_text(
+                json.dumps(
+                    {
+                        "spark-intelligence-builder": {"path": str(builder_release), "source": str(builder_release)},
+                        "spawner-ui": {"path": str(spawner_source), "source": str(spawner_source)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (state / "setup.json").write_text(
+                json.dumps({"builder_home": str(state / "spark-intelligence")}),
+                encoding="utf-8",
+            )
+            (state / "pids.json").write_text("{}", encoding="utf-8")
+
+            compiled = compile_system_map(desktop=desktop, spark_home=spark_home, registry_path=registry)
+
+        repo_board = compiled["repo_board"]
+        cockpit = compiled["operating_cockpit"]
+        item_ids = {item["id"] for item in repo_board["duplicate_truths"]["items"]}
+        cockpit_item_ids = {item["id"] for item in cockpit["duplicate_truths"]["items"]}
+
+        self.assertIn("builder-release-vs-nonrelease-installed-source", item_ids)
+        self.assertIn("spawner-module-local-state-root", item_ids)
+        self.assertIn("spark-intelligence-systems-prototype-compiler", item_ids)
+        self.assertIn("builder-release-vs-nonrelease-installed-source", cockpit_item_ids)
+        self.assertEqual(repo_board["summary"]["duplicate_truth_count"], len(item_ids))
+        self.assertFalse(compiled["operating_cockpit"]["action_boundary"].startswith("Write"))
 
     def test_voice_surface_uses_sanitized_runtime_state_export(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
