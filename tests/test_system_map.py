@@ -19,6 +19,7 @@ from spark_cli.system_map import (
     build_repo_board,
     build_trace_current_health,
     build_trace_repair_queue,
+    build_spark_os_review_candidates,
     build_voice_surface_view,
     collect_repo_metadata,
     compile_system_map,
@@ -634,6 +635,87 @@ class SparkSystemMapTests(unittest.TestCase):
         self.assertNotIn("C:/private/path", encoded)
         self.assertNotIn("private project", encoded)
         self.assertNotIn("private prompt should stay out", encoded)
+
+    def test_spark_os_review_candidates_project_labs_and_swarm_without_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            builder_home = root / "builder"
+            builder_home.mkdir()
+            spawner_trace = root / "prd-auto-trace.jsonl"
+            conn = sqlite3.connect(builder_home / "state.db")
+            try:
+                conn.execute("create table builder_events(request_id text, trace_ref text)")
+                conn.execute(
+                    "insert into builder_events(request_id, trace_ref) values (?, ?)",
+                    ("req-private-1", "trace-private-1"),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            spawner_trace.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "ts": "2026-05-12T03:24:22.292Z",
+                                "requestId": "req-private-1",
+                                "traceRef": "trace-private-1",
+                                "event": "request_written",
+                                "projectName": "private prompt should stay out",
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "ts": "2026-05-12T03:24:22.308Z",
+                                "requestId": "req-private-1",
+                                "traceRef": "trace-private-1",
+                                "event": "authority_verdict_evaluated",
+                                "authorityVerdict": {
+                                    "schema_version": "spark.authority_verdict.v1",
+                                    "traceRef": "trace-private-1",
+                                    "actionFamily": "mission_execution",
+                                    "sourcePolicy": "spawner_policy",
+                                    "verdict": "blocked",
+                                    "sourceRepo": "spawner-ui",
+                                    "reasonCode": "review_required",
+                                },
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "ts": "2026-05-12T03:24:22.335Z",
+                                "requestId": "req-private-1",
+                                "traceRef": "trace-private-1",
+                                "event": "deterministic_static_artifacts_written",
+                                "fileCount": 2,
+                                "artifactBody": "artifact body should stay out",
+                            }
+                        ),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            candidates = build_spark_os_review_candidates(spawner_trace, builder_home=builder_home)
+
+        encoded = json.dumps(candidates)
+        self.assertEqual(candidates["counts"]["candidate_count"], 1)
+        item = candidates["items"][0]
+        labs = item["labs_review_packet_candidate"]
+        swarm = item["swarm_review_only_proposal_candidate"]
+        self.assertEqual(labs["schema_version"], "adaptive_creator_loop.spark_os_labs_review_packet.v1")
+        self.assertEqual(labs["ownership"]["contract_owner_repo"], "spark-domain-chip-labs")
+        self.assertFalse(labs["network_publication_allowed"])
+        self.assertFalse(swarm["networkPublicationAllowed"])
+        self.assertTrue(swarm["reviewOnly"])
+        self.assertTrue(swarm["publicationBlock"]["noAutomaticPublish"])
+        self.assertTrue(item["builder_trace_join_present"])
+        self.assertTrue(str(item["request_id"]).startswith("request_id:redacted:"))
+        self.assertTrue(str(item["trace_ref"]).startswith("trace_ref:redacted:"))
+        self.assertNotIn("req-private-1", encoded)
+        self.assertNotIn("trace-private-1", encoded)
+        self.assertNotIn("private prompt should stay out", encoded)
+        self.assertNotIn("artifact body should stay out", encoded)
 
     def test_process_summary_omits_raw_command_args(self) -> None:
         summary = summarize_pids(
