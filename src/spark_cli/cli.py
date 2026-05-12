@@ -3464,6 +3464,24 @@ def build_module_envs(args: argparse.Namespace, modules_by_name: dict[str, Modul
     }
 
 
+def should_preserve_level5_guardrails(module_name: str) -> bool:
+    if module_name not in {"spawner-ui", "spark-telegram-bot"}:
+        return False
+    from .sandbox.access import LEVEL5_ENV, level5_guardrails_configured_by_audit
+
+    existing = read_generated_env(MODULE_CONFIG_DIR / f"{module_name}.env")
+    already_enabled = all(existing.get(key) == value for key, value in LEVEL5_ENV.items())
+    return already_enabled or level5_guardrails_configured_by_audit(home=SPARK_HOME)
+
+
+def preserve_level5_guardrails(module_name: str, env_values: dict[str, str]) -> dict[str, str]:
+    if not should_preserve_level5_guardrails(module_name):
+        return env_values
+    from .sandbox.access import LEVEL5_ENV
+
+    return {**env_values, **LEVEL5_ENV}
+
+
 def split_telegram_admin_ids(raw_admin_ids: str | None) -> list[str]:
     if not raw_admin_ids:
         return []
@@ -5074,6 +5092,7 @@ def write_setup_runtime_config(
     generated_envs = build_module_envs(args, modules, secret_values)
     for module in bundle:
         env_values = strip_keychain_env_vars(generated_envs.get(module.name, {}), module)
+        env_values = preserve_level5_guardrails(module.name, env_values)
         generated_path = generated_module_env_path(module)
         write_generated_env(generated_path, env_values)
         env_path = module_env_path(module)
@@ -8847,11 +8866,19 @@ def collect_telegram_fix_payload() -> dict[str, Any]:
         }
     )
     process_running = False
-    if isinstance(telegram_pid, dict):
-        process_running = pid_is_running(int(telegram_pid.get("pid", 0)))
+    process_record: dict[str, Any] | None = None
+    if isinstance(pids, dict):
+        for process_key in tracked_process_keys_for_module(pids, "spark-telegram-bot"):
+            candidate = pids.get(process_key)
+            if not isinstance(candidate, dict):
+                continue
+            if pid_is_running(int(candidate.get("pid", 0))):
+                process_record = candidate
+                process_running = True
+                break
     process_detail = (
-        f"spark-telegram-bot is running (pid {telegram_pid.get('pid')})."
-        if process_running and isinstance(telegram_pid, dict)
+        f"spark-telegram-bot is running under Spark supervision (pid {process_record.get('pid')})."
+        if process_running and isinstance(process_record, dict)
         else "spark-telegram-bot is not running under Spark supervision."
     )
     process_repair = "spark restart telegram-starter"
@@ -11166,6 +11193,22 @@ def windows_service_creationflags() -> int:
 
 def listening_pid_for_tcp_port(port: int) -> int | None:
     if os.name != "nt":
+        result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                return int(line)
+            except ValueError:
+                continue
         return None
     result = subprocess.run(
         ["netstat", "-ano", "-p", "tcp"],
@@ -11365,6 +11408,34 @@ def telegram_profile_runtime_status(setup_state: dict[str, Any], pids: dict[str,
     return statuses
 
 
+def terminate_same_user_listener_on_port(port: int, *, label: str) -> str | None:
+    if port <= 0:
+        return None
+    listener_pid = listening_pid_for_tcp_port(port)
+    if not listener_pid or not pid_is_running(listener_pid):
+        return None
+    listener_uid = proc_uid_for_pid(listener_pid)
+    if listener_uid is not None and listener_uid != os.getuid():
+        return f"{label} port {port} is already held by pid {listener_pid} owned by another user."
+    try:
+        os.kill(listener_pid, signal.SIGTERM)
+    except OSError as exc:
+        return f"{label} port {port} is already held by pid {listener_pid}, and Spark could not stop it: {exc}"
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if not pid_is_running(listener_pid):
+            return f"Stopped stale {label} listener on port {port} (pid {listener_pid})."
+        time.sleep(0.1)
+    try:
+        os.kill(listener_pid, signal.SIGKILL)
+    except OSError:
+        pass
+    active_listener = listening_pid_for_tcp_port(port)
+    if active_listener and active_listener == listener_pid:
+        return f"{label} port {port} is still held by stale pid {listener_pid}."
+    return f"Force-stopped stale {label} listener on port {port} (pid {listener_pid})."
+
+
 def start_module(module: Module, *, allow_boot_warnings: bool = False, profile: str | None = None) -> bool:
     command = module.run_command
     if not command:
@@ -11387,6 +11458,13 @@ def start_module(module: Module, *, allow_boot_warnings: bool = False, profile: 
     subprocess_env = module_runtime_env(module, profile)
     argv = module_runtime_command_argv(module, command, module.path, subprocess_env)
     ready_check = module_runtime_ready_check(module, subprocess_env)
+    relay_port = 0
+    if module.name == "spark-telegram-bot":
+        relay_port_raw = (subprocess_env.get("TELEGRAM_RELAY_PORT") or "").strip()
+        try:
+            relay_port = int(relay_port_raw or "0")
+        except ValueError:
+            relay_port = 0
     popen_kwargs: dict[str, Any] = {
         "cwd": str(module.path),
         "shell": False,
@@ -11407,6 +11485,11 @@ def start_module(module: Module, *, allow_boot_warnings: bool = False, profile: 
                 print(f"Skipping {display_name}: already running (pid {existing_pid})")
                 return True
             pids.pop(process_key, None)
+        if module.name == "spark-telegram-bot" and relay_port:
+            stale_listener_note = terminate_same_user_listener_on_port(relay_port, label=display_name)
+            if stale_listener_note:
+                print(stale_listener_note)
+                append_process_log(module.name, stale_listener_note, profile=profile)
 
         log_handle = log_path.open("a", encoding="utf-8")
         popen_kwargs["stdout"] = log_handle
