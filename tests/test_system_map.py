@@ -717,6 +717,37 @@ class SparkSystemMapTests(unittest.TestCase):
         self.assertNotIn("private prompt should stay out", encoded)
         self.assertNotIn("artifact body should stay out", encoded)
 
+    def test_spark_os_review_candidates_keep_newest_sample_and_total_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            builder_home = root / "builder"
+            builder_home.mkdir()
+            spawner_trace = root / "prd-auto-trace.jsonl"
+            rows = []
+            for idx in range(21):
+                rows.append(
+                    json.dumps(
+                        {
+                            "ts": f"2026-05-12T03:{idx:02d}:00.000Z",
+                            "requestId": f"req-private-{idx}",
+                            "traceRef": f"trace-private-{idx}",
+                            "event": "deterministic_static_artifacts_written",
+                            "fileCount": 2,
+                        }
+                    )
+                )
+            spawner_trace.write_text("\n".join(rows), encoding="utf-8")
+
+            candidates = build_spark_os_review_candidates(spawner_trace, builder_home=builder_home)
+
+        encoded = json.dumps(candidates)
+        self.assertEqual(candidates["counts"]["candidate_count"], 21)
+        self.assertEqual(candidates["counts"]["candidate_sample_count"], 20)
+        self.assertEqual(candidates["items"][0]["latest_ts"], "2026-05-12T03:20:00.000Z")
+        self.assertEqual(candidates["items"][-1]["latest_ts"], "2026-05-12T03:01:00.000Z")
+        self.assertNotIn("req-private-20", encoded)
+        self.assertNotIn("trace-private-20", encoded)
+
     def test_process_summary_omits_raw_command_args(self) -> None:
         summary = summarize_pids(
             {

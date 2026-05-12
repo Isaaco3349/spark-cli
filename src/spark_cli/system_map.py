@@ -1145,7 +1145,7 @@ def build_spark_os_review_candidates(path: Path, *, builder_home: Path) -> dict[
         out["error"] = f"{type(exc).__name__}: {exc}"
         return out
 
-    items: deque[dict[str, Any]] = deque(maxlen=20)
+    candidates: list[dict[str, Any]] = []
     for raw_key, group in groups.items():
         event_counts = Counter(group.get("event_counts") or {})
         has_artifact_metadata = bool(
@@ -1312,7 +1312,7 @@ def build_spark_os_review_candidates(path: Path, *, builder_home: Path) -> dict[
             "blockedReasons": blockers,
             "nextAction": "Keep as review-only until human, benchmark, rollback, publication, and authority gates pass.",
         }
-        items.append(
+        candidates.append(
             {
                 "schema_version": "spark.os_review_candidate.v0",
                 "candidate_id": f"spark-os-review:{hashlib.sha256(raw_key.encode('utf-8', errors='ignore')).hexdigest()[:12]}",
@@ -1333,12 +1333,17 @@ def build_spark_os_review_candidates(path: Path, *, builder_home: Path) -> dict[
         )
 
     out["parse_errors"] = parse_errors
+    candidates.sort(key=lambda item: str(item.get("latest_ts") or ""), reverse=True)
+    items = candidates[:20]
     out["counts"] = {
-        "candidate_count": len(items),
-        "blocked_count": sum(1 for item in items if item.get("status") == "blocked"),
-        "builder_trace_join_present_count": sum(1 for item in items if item.get("builder_trace_join_present")),
+        "candidate_count": len(candidates),
+        "candidate_sample_count": len(items),
+        "blocked_count": sum(1 for item in candidates if item.get("status") == "blocked"),
+        "builder_trace_join_present_count": sum(
+            1 for item in candidates if item.get("builder_trace_join_present")
+        ),
     }
-    out["items"] = list(items)
+    out["items"] = items
     return out
 
 
