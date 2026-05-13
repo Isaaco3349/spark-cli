@@ -1234,6 +1234,10 @@ def assert_no_linked_write_path(path: Path) -> None:
 def installer_release_pins() -> dict[str, Any]:
     shell = INSTALLER_SCRIPT_PATHS["install.sh"].read_text(encoding="utf-8")
     powershell = INSTALLER_SCRIPT_PATHS["install.ps1"].read_text(encoding="utf-8")
+    return installer_release_pins_from_text(shell, powershell)
+
+
+def installer_release_pins_from_text(shell: str, powershell: str) -> dict[str, Any]:
     shell_release = SHELL_INSTALLER_RELEASE_PATTERN.search(shell)
     shell_ref = SHELL_INSTALLER_REF_PATTERN.search(shell)
     powershell_release = POWERSHELL_INSTALLER_RELEASE_PATTERN.search(powershell)
@@ -1254,6 +1258,34 @@ def installer_release_pins() -> dict[str, Any]:
     }
 
 
+def installer_pin_for_script(name: str, text: str) -> dict[str, str]:
+    release_pattern = SHELL_INSTALLER_RELEASE_PATTERN if name == "install.sh" else POWERSHELL_INSTALLER_RELEASE_PATTERN
+    ref_pattern = SHELL_INSTALLER_REF_PATTERN if name == "install.sh" else POWERSHELL_INSTALLER_REF_PATTERN
+    release = release_pattern.search(text)
+    ref = ref_pattern.search(text)
+    return {
+        "releaseName": release.group(1) if release else "",
+        "ref": ref.group(1).lower() if ref else "",
+    }
+
+
+def current_git_commit() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    commit = result.stdout.strip().lower()
+    if result.returncode != 0 or not GIT_COMMIT_SHA_PATTERN.fullmatch(commit):
+        return ""
+    return commit
+
+
 def installer_manifest_payload() -> dict[str, Any]:
     return {
         "schema": 1,
@@ -1271,7 +1303,7 @@ def installer_manifest_payload() -> dict[str, Any]:
     }
 
 
-def hosted_installer_sha256(name: str, url: str) -> str:
+def hosted_installer_bytes(name: str, url: str) -> bytes:
     request = urllib.request.Request(
         url,
         headers={
@@ -1280,8 +1312,11 @@ def hosted_installer_sha256(name: str, url: str) -> str:
         },
     )
     with installer_urlopen(request, timeout=20) as response:
-        payload = response.read()
-    return sha256_bytes(payload)
+        return response.read()
+
+
+def hosted_installer_sha256(name: str, url: str) -> str:
+    return sha256_bytes(hosted_installer_bytes(name, url))
 
 
 def hosted_installer_checksums() -> dict[str, str]:
@@ -1339,6 +1374,8 @@ def collect_installer_integrity_payload(*, hosted: bool = False) -> dict[str, An
     manifest_source = manifest.get("source") if isinstance(manifest, dict) else None
     expected_release = str(manifest_source.get("releaseName", "")) if isinstance(manifest_source, dict) else ""
     expected_ref = str(manifest_source.get("ref", "")).lower() if isinstance(manifest_source, dict) else ""
+    expected_hosted_release = expected_release
+    expected_hosted_ref = current_git_commit() or expected_ref
     local_source = installer_release_pins()
     checks: list[dict[str, Any]] = []
     source_ok = (
@@ -1394,20 +1431,25 @@ def collect_installer_integrity_payload(*, hosted: bool = False) -> dict[str, An
         if hosted:
             url = HOSTED_INSTALLER_URLS[name]
             expected_hosted = hosted_expected.get(name, "")
+            hosted_pins = {"releaseName": "", "ref": ""}
             if hosted_metadata_error:
                 hosted_hash = "<fetch failed>"
                 hosted_ok = False
                 detail = f"Could not fetch hosted installer checksum metadata: {hosted_metadata_error}"
             else:
                 try:
-                    hosted_hash = hosted_installer_sha256(name, url).lower()
+                    hosted_payload = hosted_installer_bytes(name, url)
+                    hosted_hash = sha256_bytes(hosted_payload).lower()
+                    hosted_text = hosted_payload.decode("utf-8-sig", errors="replace")
+                    hosted_pins = installer_pin_for_script(name, hosted_text)
                     hosted_checksum_ok = bool(expected_hosted) and hosted_hash == expected_hosted
-                    hosted_manifest_ok = bool(expected) and expected_hosted == expected
-                    hosted_ok = hosted_checksum_ok and hosted_manifest_ok
+                    hosted_release_ok = hosted_pins["releaseName"] == expected_hosted_release
+                    hosted_ref_ok = hosted_pins["ref"] == expected_hosted_ref
+                    hosted_ok = hosted_checksum_ok and hosted_release_ok and hosted_ref_ok
                     detail = (
-                        f"{url} matches hosted checksum metadata and the committed installer manifest."
+                        f"{url} matches hosted checksum metadata and installs the expected Spark CLI source."
                         if hosted_ok
-                        else f"{url} does not match hosted checksum metadata or the committed installer manifest."
+                        else f"{url} does not match hosted checksum metadata or expected Spark CLI source pins."
                     )
                 except (OSError, urllib.error.URLError, TimeoutError) as exc:
                     hosted_hash = "<fetch failed>"
@@ -1417,18 +1459,26 @@ def collect_installer_integrity_payload(*, hosted: bool = False) -> dict[str, An
                 {
                     "name": f"hosted_{name}",
                     "ok": hosted_ok,
-                    "expected_sha256": expected,
+                    "expected_sha256": expected_hosted,
                     "actual_sha256": hosted_hash,
                     "hosted_metadata_sha256": expected_hosted,
+                    "committed_manifest_sha256": expected,
+                    "expected_release": expected_hosted_release,
+                    "actual_release": hosted_pins.get("releaseName", ""),
+                    "expected_ref": expected_hosted_ref,
+                    "actual_ref": hosted_pins.get("ref", ""),
                     "url": url,
                     "checksum_url": HOSTED_INSTALLER_CHECKSUMS_URL,
                     "detail": (
                         detail
                         if hosted_ok
                         else (
-                            f"{detail} Expected manifest sha {expected}; "
+                            f"{detail} Expected hosted sha {expected_hosted or '<missing>'}; "
+                            f"committed manifest sha {expected or '<missing>'}; "
                             f"hosted metadata sha {expected_hosted or '<missing>'}; "
-                            f"hosted byte sha {hosted_hash}."
+                            f"hosted byte sha {hosted_hash}; "
+                            f"expected source {expected_hosted_release}@{expected_hosted_ref}; "
+                            f"hosted script source {hosted_pins.get('releaseName', '')}@{hosted_pins.get('ref', '')}."
                         )
                     ),
                 }
@@ -1438,14 +1488,14 @@ def collect_installer_integrity_payload(*, hosted: bool = False) -> dict[str, An
             release_manifest = hosted_json_payload(HOSTED_RELEASE_MANIFEST_URL)
             spark_cli = release_manifest.get("sparkCli") if isinstance(release_manifest.get("sparkCli"), dict) else {}
             hosted_release_ref = str(spark_cli.get("commit", "")).lower()
-            release_ok = spark_cli.get("releaseName") == expected_release and hosted_release_ref == expected_ref
+            release_ok = spark_cli.get("releaseName") == expected_hosted_release and hosted_release_ref == expected_hosted_ref
             checks.append(
                 {
                     "name": "hosted_release_manifest",
                     "ok": release_ok,
-                    "expected_release": expected_release,
+                    "expected_release": expected_hosted_release,
                     "actual_release": str(spark_cli.get("releaseName", "")),
-                    "expected_ref": expected_ref,
+                    "expected_ref": expected_hosted_ref,
                     "actual_ref": hosted_release_ref,
                     "url": HOSTED_RELEASE_MANIFEST_URL,
                     "detail": (
@@ -1468,24 +1518,19 @@ def collect_installer_integrity_payload(*, hosted: bool = False) -> dict[str, An
             commands = hosted_json_payload(HOSTED_INSTALLER_COMMANDS_URL)
             source = commands.get("source") if isinstance(commands.get("source"), dict) else {}
             command_hashes = commands.get("checksums", {}).get("sha256", {}) if isinstance(commands.get("checksums"), dict) else {}
-            expected_hashes = {
-                name: str(installers.get(name, {}).get("sha256", "")).lower()
-                for name in INSTALLER_SCRIPT_PATHS
-                if isinstance(installers, dict) and isinstance(installers.get(name), dict)
-            }
             command_ref = str(source.get("ref", "")).lower()
             commands_ok = (
-                source.get("releaseName") == expected_release
-                and command_ref == expected_ref
+                source.get("releaseName") == expected_hosted_release
+                and command_ref == expected_hosted_ref
                 and (not hosted_release_ref or command_ref == hosted_release_ref)
-                and command_hashes == expected_hashes
+                and command_hashes == hosted_expected
             )
             commands_detail = "Hosted command metadata matches installer hashes and release pins."
             if not commands_ok:
                 commands_detail = (
                     "Hosted command metadata is stale or does not match installer hashes and release pins. "
-                    f"Expected hashes {expected_hashes}; hosted hashes {command_hashes}; "
-                    f"expected release {expected_release}; "
+                    f"Expected hashes {hosted_expected}; hosted hashes {command_hashes}; "
+                    f"expected release/ref {expected_hosted_release}@{expected_hosted_ref}; "
                     f"hosted command release/ref {source.get('releaseName')}@{command_ref}; "
                     f"hosted release-manifest ref {hosted_release_ref or '<missing>'}."
                 )
@@ -1493,9 +1538,9 @@ def collect_installer_integrity_payload(*, hosted: bool = False) -> dict[str, An
                 {
                     "name": "hosted_commands_metadata",
                     "ok": commands_ok,
-                    "expected_release": expected_release,
+                    "expected_release": expected_hosted_release,
                     "actual_release": str(source.get("releaseName", "")),
-                    "expected_ref": expected_ref,
+                    "expected_ref": expected_hosted_ref,
                     "actual_ref": command_ref,
                     "url": HOSTED_INSTALLER_COMMANDS_URL,
                     "detail": commands_detail,

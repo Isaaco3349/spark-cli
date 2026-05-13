@@ -9236,22 +9236,31 @@ class SparkCliTests(unittest.TestCase):
                 return self.payload
 
         local = collect_installer_integrity_payload()
-        local_hashes = {
+        committed_hashes = {
             check["name"].removeprefix("local_"): check["actual_sha256"]
             for check in local["checks"]
             if check["name"].startswith("local_install.")
         }
         source = installer_manifest_payload()["source"]
+        repo_root = Path(__file__).resolve().parents[1]
+        hosted_installers = {
+            "install.sh": (repo_root / "scripts" / "install.sh").read_bytes() + b"\n# hosted artifact metadata\n",
+            "install.ps1": (repo_root / "scripts" / "install.ps1").read_bytes() + b"\n# hosted artifact metadata\n",
+        }
+        hosted_hashes = {
+            name: hashlib.sha256(payload).hexdigest()
+            for name, payload in hosted_installers.items()
+        }
         checksums_payload = (
-            f"{local_hashes['install.sh']}  install.sh\n"
-            f"{local_hashes['install.ps1']}  install.ps1\n"
+            f"{hosted_hashes['install.sh']}  install.sh\n"
+            f"{hosted_hashes['install.ps1']}  install.ps1\n"
         ).encode("utf-8")
         release_manifest_payload = json.dumps(
             {"sparkCli": {"releaseName": source["releaseName"], "commit": source["ref"]}}
         ).encode("utf-8")
         commands_payload = json.dumps(
             {
-                "checksums": {"sha256": local_hashes},
+                "checksums": {"sha256": hosted_hashes},
                 "source": {"releaseName": source["releaseName"], "ref": source["ref"]},
             }
         ).encode("utf-8")
@@ -9265,19 +9274,22 @@ class SparkCliTests(unittest.TestCase):
             if url.endswith("/install/commands.json"):
                 return FakeResponse(commands_payload)
             if url.endswith("/install.sh"):
-                return FakeResponse((Path(__file__).resolve().parents[1] / "scripts" / "install.sh").read_bytes())
+                return FakeResponse(hosted_installers["install.sh"])
             if url.endswith("/install.ps1"):
-                return FakeResponse((Path(__file__).resolve().parents[1] / "scripts" / "install.ps1").read_bytes())
+                return FakeResponse(hosted_installers["install.ps1"])
             raise AssertionError(url)
 
-        with patch("spark_cli.cli.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("spark_cli.cli.current_git_commit", return_value=source["ref"]), \
+             patch("spark_cli.cli.urllib.request.urlopen", side_effect=fake_urlopen):
             payload = collect_installer_integrity_payload(hosted=True)
 
         self.assertTrue(payload["ok"])
         checks = {check["name"]: check for check in payload["checks"]}
-        self.assertEqual(checks["hosted_install.sh"]["expected_sha256"], local_hashes["install.sh"])
-        self.assertEqual(checks["hosted_install.sh"]["hosted_metadata_sha256"], local_hashes["install.sh"])
-        self.assertIn("committed installer manifest", checks["hosted_install.sh"]["detail"])
+        self.assertEqual(checks["hosted_install.sh"]["expected_sha256"], hosted_hashes["install.sh"])
+        self.assertEqual(checks["hosted_install.sh"]["hosted_metadata_sha256"], hosted_hashes["install.sh"])
+        self.assertEqual(checks["hosted_install.sh"]["committed_manifest_sha256"], committed_hashes["install.sh"])
+        self.assertNotEqual(checks["hosted_install.sh"]["committed_manifest_sha256"], hosted_hashes["install.sh"])
+        self.assertIn("expected Spark CLI source", checks["hosted_install.sh"]["detail"])
         self.assertTrue(checks["hosted_release_manifest"]["ok"])
         self.assertTrue(checks["hosted_commands_metadata"]["ok"])
 
@@ -9298,8 +9310,14 @@ class SparkCliTests(unittest.TestCase):
         source = installer_manifest_payload()["source"]
         stale_ref = "0" * 40
         stale_installers = {
-            "install.sh": b"#!/bin/sh\necho stale\n",
-            "install.ps1": b"Write-Host stale\n",
+            "install.sh": (
+                f'#!/bin/sh\nSPARK_CLI_RELEASE_NAME="${{SPARK_CLI_RELEASE_NAME:-{source["releaseName"]}}}"\n'
+                f'SPARK_DEFAULT_CLI_REF="{stale_ref}"\n'
+            ).encode("utf-8"),
+            "install.ps1": (
+                f'param([string]$Ref = "{stale_ref}")\n'
+                f'$SparkCliReleaseName = "{source["releaseName"]}"\n'
+            ).encode("utf-8"),
         }
         stale_hashes = {
             name: hashlib.sha256(payload).hexdigest()
@@ -9333,7 +9351,8 @@ class SparkCliTests(unittest.TestCase):
                 return FakeResponse(stale_installers["install.ps1"])
             raise AssertionError(url)
 
-        with patch("spark_cli.cli.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("spark_cli.cli.current_git_commit", return_value=source["ref"]), \
+             patch("spark_cli.cli.urllib.request.urlopen", side_effect=fake_urlopen):
             payload = collect_installer_integrity_payload(hosted=True)
 
         self.assertFalse(payload["ok"])
@@ -9342,7 +9361,8 @@ class SparkCliTests(unittest.TestCase):
         self.assertFalse(checks["hosted_install.ps1"]["ok"])
         self.assertFalse(checks["hosted_release_manifest"]["ok"])
         self.assertFalse(checks["hosted_commands_metadata"]["ok"])
-        self.assertIn("committed installer manifest", checks["hosted_install.sh"]["detail"])
+        self.assertIn("expected Spark CLI source", checks["hosted_install.sh"]["detail"])
+        self.assertEqual(checks["hosted_install.sh"]["actual_ref"], stale_ref)
         self.assertEqual(checks["hosted_release_manifest"]["actual_ref"], stale_ref)
 
     def test_hosted_installer_checks_fail_when_current_release_has_wrong_ref(self) -> None:
@@ -9395,7 +9415,8 @@ class SparkCliTests(unittest.TestCase):
                 return FakeResponse((Path(__file__).resolve().parents[1] / "scripts" / "install.ps1").read_bytes())
             raise AssertionError(url)
 
-        with patch("spark_cli.cli.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("spark_cli.cli.current_git_commit", return_value=source["ref"]), \
+             patch("spark_cli.cli.urllib.request.urlopen", side_effect=fake_urlopen):
             payload = collect_installer_integrity_payload(hosted=True)
 
         self.assertFalse(payload["ok"])
@@ -9449,7 +9470,8 @@ class SparkCliTests(unittest.TestCase):
                 return FakeResponse((Path(__file__).resolve().parents[1] / "scripts" / "install.ps1").read_bytes())
             raise AssertionError(url)
 
-        with patch("spark_cli.cli.urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("spark_cli.cli.current_git_commit", return_value=installer_manifest_payload()["source"]["ref"]), \
+             patch("spark_cli.cli.urllib.request.urlopen", side_effect=fake_urlopen):
             payload = collect_installer_integrity_payload(hosted=True)
 
         self.assertFalse(payload["ok"])
