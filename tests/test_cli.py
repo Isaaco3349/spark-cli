@@ -29,6 +29,7 @@ from spark_cli.cli import (
     collect_secret_requirements,
     collect_secret_surface_payload,
     collect_security_audit_payload,
+    collect_specialization_loop_payload,
     collect_support_bundle_payload,
     collect_secret_values,
     collect_installer_integrity_payload,
@@ -9693,6 +9694,49 @@ class SparkCliTests(unittest.TestCase):
         command = run_mock.call_args.args[0]
         self.assertIn("direct-smoke", command)
         self.assertIn("--sdk-module", command)
+
+    def test_collect_specialization_loop_payload_reports_missing_surfaces(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), \
+            patch("spark_cli.cli.load_json", return_value={}):
+            payload = collect_specialization_loop_payload()
+
+        self.assertFalse(payload["ok"])
+        checks = {check["name"]: check for check in payload["checks"]}
+        self.assertFalse(checks["domain_chip_labs"]["ok"])
+        self.assertFalse(checks["spark_swarm_specialization_registry"]["ok"])
+        self.assertFalse(checks["specialization_path"]["ok"])
+        self.assertIn("SPARK_DOMAIN_CHIP_LABS_ROOT", checks["domain_chip_labs"]["detail"])
+        self.assertIn("SPARK_SPECIALIZATION_PATH_ROOTS", checks["specialization_path"]["detail"])
+
+    def test_collect_specialization_loop_payload_accepts_discoverable_loop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            labs = root / "spark-domain-chip-labs"
+            swarm = root / "spark-swarm"
+            path_root = root / "specialization-path-startup-yc"
+            (labs / "src" / "chip_labs").mkdir(parents=True)
+            (labs / "docs" / "creator_system" / "schemas").mkdir(parents=True)
+            (labs / "docs" / "creator_system" / "schemas" / "creator-mission-status.schema.json").write_text("{}", encoding="utf-8")
+            (swarm / "config").mkdir(parents=True)
+            (swarm / "config" / "specialization-paths.json").write_text("{}", encoding="utf-8")
+            (path_root / "scripts").mkdir(parents=True)
+            (path_root / "scripts" / "run_autoloop.py").write_text("print('ok')\n", encoding="utf-8")
+
+            env = {
+                "SPARK_DOMAIN_CHIP_LABS_ROOT": str(labs),
+                "SPARK_SWARM_ROOT": str(swarm),
+                "SPARK_SPECIALIZATION_PATH_ROOTS": str(path_root),
+            }
+            with patch.dict(os.environ, env, clear=True), \
+                patch("spark_cli.cli.load_json", return_value={}):
+                payload = collect_specialization_loop_payload()
+
+        self.assertTrue(payload["ok"])
+        checks = {check["name"]: check for check in payload["checks"]}
+        self.assertTrue(checks["domain_chip_labs"]["ok"])
+        self.assertTrue(checks["spark_swarm_specialization_registry"]["ok"])
+        self.assertTrue(checks["specialization_path"]["ok"])
+        self.assertEqual(len(payload["specialization_paths"]), 1)
 
     def test_collect_verify_payload_flags_missing_mission_provider_and_webhook(self) -> None:
         expected = ["spark-researcher", "spark-character", "spark-intelligence-builder", "domain-chip-memory", "spawner-ui", "spark-telegram-bot"]

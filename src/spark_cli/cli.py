@@ -9679,6 +9679,124 @@ def collect_builder_memory_direct_smoke(
     }
 
 
+def env_path_candidates(name: str) -> list[Path]:
+    raw = os.environ.get(name, "")
+    if not raw.strip():
+        return []
+    return [Path(item).expanduser() for item in raw.split(os.pathsep) if item.strip()]
+
+
+def installed_path_candidate(installed: object, module_name: str) -> Path | None:
+    path = installed_record_path(installed, module_name)
+    return path if path is not None and path.exists() else None
+
+
+def first_existing_path(paths: list[Path]) -> Path | None:
+    for candidate in paths:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def specialization_path_candidates(installed: object) -> list[Path]:
+    candidates = env_path_candidates("SPARK_SPECIALIZATION_PATH_ROOTS")
+    if isinstance(installed, dict):
+        for name in sorted(installed):
+            if str(name).startswith("specialization-path-"):
+                candidate = installed_path_candidate(installed, str(name))
+                if candidate is not None:
+                    candidates.append(candidate)
+    return candidates
+
+
+def specialization_path_is_usable(path: Path) -> bool:
+    return any(
+        candidate.exists()
+        for candidate in (
+            path / "scripts" / "run_autoloop.py",
+            path / "specialization-path" / "path.manifest.json",
+            path / "path.manifest.json",
+            path / "pyproject.toml",
+        )
+    )
+
+
+def collect_specialization_loop_payload() -> dict[str, Any]:
+    installed = load_json(REGISTRY_PATH, {})
+    labs_root = first_existing_path([
+        *env_path_candidates("SPARK_DOMAIN_CHIP_LABS_ROOT"),
+        *(candidate for candidate in [installed_path_candidate(installed, "spark-domain-chip-labs")] if candidate is not None),
+    ])
+    swarm_root = first_existing_path([
+        *env_path_candidates("SPARK_SWARM_ROOT"),
+        *(candidate for candidate in [installed_path_candidate(installed, "spark-swarm")] if candidate is not None),
+    ])
+    path_roots = specialization_path_candidates(installed)
+    usable_paths = [candidate for candidate in path_roots if specialization_path_is_usable(candidate)]
+
+    labs_ok = bool(
+        labs_root
+        and (labs_root / "src" / "chip_labs").exists()
+        and (labs_root / "docs" / "creator_system" / "schemas" / "creator-mission-status.schema.json").exists()
+    )
+    swarm_ok = bool(
+        swarm_root
+        and (swarm_root / "config" / "specialization-paths.json").exists()
+    )
+    path_ok = bool(usable_paths)
+
+    checks = [
+        {
+            "name": "domain_chip_labs",
+            "ok": labs_ok,
+            "required": True,
+            "detail": (
+                f"spark-domain-chip-labs found at {labs_root} with creator mission status schema."
+                if labs_ok
+                else "spark-domain-chip-labs is not installed or discoverable as SPARK_DOMAIN_CHIP_LABS_ROOT."
+            ),
+            "repair": "Install spark-domain-chip-labs or set SPARK_DOMAIN_CHIP_LABS_ROOT to its repo path.",
+        },
+        {
+            "name": "spark_swarm_specialization_registry",
+            "ok": swarm_ok,
+            "required": True,
+            "detail": (
+                f"spark-swarm specialization registry found at {swarm_root}."
+                if swarm_ok
+                else "spark-swarm is not installed or discoverable as SPARK_SWARM_ROOT."
+            ),
+            "repair": "Install spark-swarm or set SPARK_SWARM_ROOT to its repo path.",
+        },
+        {
+            "name": "specialization_path",
+            "ok": path_ok,
+            "required": True,
+            "detail": (
+                f"{len(usable_paths)} specialization path root(s) are discoverable."
+                if path_ok
+                else "No usable specialization-path-* root is installed or listed in SPARK_SPECIALIZATION_PATH_ROOTS."
+            ),
+            "repair": "Install at least one specialization-path-* repo or set SPARK_SPECIALIZATION_PATH_ROOTS.",
+            "paths": [str(path) for path in usable_paths],
+        },
+    ]
+    ok = all(bool(check["ok"]) for check in checks if check.get("required", True))
+    return {
+        "ok": ok,
+        "summary": "Spark specialization loop verification",
+        "checks": checks,
+        "labs_root": str(labs_root) if labs_root else None,
+        "swarm_root": str(swarm_root) if swarm_root else None,
+        "specialization_paths": [str(path) for path in usable_paths],
+        "next_commands": [
+            "spark verify --specialization-loop --json",
+            "chip-labs creator-run-smoke <run-dir> --recompute --fail-on-blocked",
+            "spark-swarm specialization-path doctor <path_key> <repo> --json",
+        ],
+    }
+
+
 def collect_verify_payload(*, deep: bool = False) -> dict[str, Any]:
     status_payload = collect_status_payload()
     provider_payload = provider_status_payload()
@@ -10837,6 +10955,23 @@ def cmd_verify(args: argparse.Namespace) -> int:
             print(f"{marker} {check['name']}: {check['detail']}")
             if not check["ok"] and check.get("repair"):
                 print(f"      {check['repair']}")
+        return 0 if payload["ok"] else 1
+
+    if getattr(args, "specialization_loop", False):
+        payload = collect_specialization_loop_payload()
+        if args.json:
+            print(json.dumps(payload, indent=2))
+            return 0 if payload["ok"] else 1
+        print(payload["summary"])
+        for check in payload["checks"]:
+            marker = "[OK]" if check["ok"] else "[FIX]"
+            print(f"{marker} {check['name']}: {check['detail']}")
+            if not check["ok"] and check.get("repair"):
+                print(f"      {check['repair']}")
+        print("")
+        print("Useful commands:")
+        for command in payload["next_commands"]:
+            print(f"  {command}")
         return 0 if payload["ok"] else 1
 
     if getattr(args, "hosted", False):
@@ -13593,6 +13728,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--provenance", action="store_true", help="Report blessed module commit-pin, signature, and attestation posture")
     verify_parser.add_argument("--registry-pins", action="store_true", help="Verify blessed registry pins match each module's remote HEAD")
     verify_parser.add_argument("--sandboxes", action="store_true", help="Verify optional SSH/Modal sandbox readiness without running cloud smoke jobs")
+    verify_parser.add_argument("--specialization-loop", action="store_true", help="Verify Domain Chip Labs, Swarm, and specialization-path loop surfaces are discoverable")
     verify_parser.set_defaults(func=cmd_verify)
 
     smoke_parser = subparsers.add_parser("smoke", help="Run guided first-run Spark smoke checks")

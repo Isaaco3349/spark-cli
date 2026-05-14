@@ -43,6 +43,14 @@ Add `--elevenlabs-api-key @clipboard` if you want hosted ElevenLabs TTS configur
 
 Public builder labs such as `spark-domain-chip-labs` and `spark-personality-chip-labs` are available separately, but they are not automatic starter-bundle modules yet. Spark Swarm Workspace/network submission is private/upcoming and is not required for local recursive Builder chip loops.
 
+For creator-system and specialization-path work, verify those optional surfaces explicitly:
+
+```bash
+spark verify --specialization-loop
+```
+
+That check looks for `spark-domain-chip-labs`, `spark-swarm`, and at least one usable `specialization-path-*` root. If they are not installed as Spark modules yet, set `SPARK_DOMAIN_CHIP_LABS_ROOT`, `SPARK_SWARM_ROOT`, and `SPARK_SPECIALIZATION_PATH_ROOTS` to the local repo paths before running it.
+
 If another `spark` binary is already on your PATH, use `spark-local`. The package exposes both names to the same entrypoint.
 
 ## What Spark CLI Does
@@ -268,6 +276,14 @@ spark verify --deep
 ```
 
 Deep verification runs Builder's direct memory smoke test with cleanup, so a setup agent can distinguish "memory is installed" from "memory is actually wired."
+
+For recursive specialization loops, run:
+
+```bash
+spark verify --specialization-loop
+```
+
+This does not publish anything. It simply proves whether Domain Chip Labs, Spark Swarm's specialization registry, and at least one specialization path are discoverable before Telegram claims that benchmarked self-improvement loops are available.
 
 To verify the blessed registry after pushing a production module:
 
