@@ -6232,6 +6232,13 @@ def cmd_live_status(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     if getattr(args, "doctor_command", None) == "llm":
         return cmd_doctor_llm(args)
+    if getattr(args, "doctor_command", None) == "specialization-loop":
+        payload = collect_specialization_loop_payload()
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            print_plain_specialization_loop_doctor(payload)
+        return 0 if payload.get("ok") else 1
     payload = collect_status_payload()
     if args.json:
         print(json.dumps(payload, indent=2))
@@ -6288,6 +6295,46 @@ def print_plain_doctor(payload: dict[str, Any]) -> None:
     print("- spark live status")
     print("- spark providers status")
     print("- spark verify --onboarding")
+
+
+def print_plain_specialization_loop_doctor(payload: dict[str, Any]) -> None:
+    print("Spark specialization loop doctor")
+    print("Specialization loops are discoverable." if payload.get("ok") else "Specialization loops need attention.")
+    print("")
+    print("Loop surfaces")
+    checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        label = str(check.get("name") or "check").replace("_", " ")
+        state = "ready" if check.get("ok") else "missing"
+        detail = str(check.get("detail") or "").strip()
+        print(f"- {label}: {state}" + (f" - {detail}" if detail else ""))
+    missing = [check for check in checks if isinstance(check, dict) and not check.get("ok")]
+    if missing:
+        print("")
+        print("Fix next")
+        for check in missing:
+            repair = str(check.get("repair") or "").strip()
+            if repair:
+                print(f"- {repair}")
+    print("")
+    print("Proof commands")
+    for command in payload.get("next_commands", []):
+        print(f"- {command}")
+    safe_next_moves = payload.get("safe_next_moves")
+    if isinstance(safe_next_moves, list) and safe_next_moves:
+        print("")
+        print("Safe next moves")
+        for move in safe_next_moves:
+            print(f"- {move}")
+    print("")
+    print("Boundary")
+    boundary = str(
+        payload.get("boundary")
+        or "This doctor only inspects discoverability. It does not start runs, publish, delete, or repair automatically."
+    )
+    print(f"- {boundary}")
 
 
 def collect_support_bundle_payload(*, include_logs: bool = False, log_lines: int = 120) -> dict[str, Any]:
@@ -9709,6 +9756,26 @@ def specialization_path_candidates(installed: object) -> list[Path]:
     return candidates
 
 
+def telegram_gateway_candidates(installed: object) -> list[Path]:
+    candidates = env_path_candidates("SPARK_TELEGRAM_BOT_ROOT")
+    candidate = installed_path_candidate(installed, "spark-telegram-bot")
+    if candidate is not None:
+        candidates.append(candidate)
+    return candidates
+
+
+def telegram_gateway_is_usable(path: Path) -> bool:
+    return any(
+        candidate.exists()
+        for candidate in (
+            path / "spark.toml",
+            path / "package.json",
+            path / "pyproject.toml",
+            path / "src",
+        )
+    )
+
+
 def specialization_path_is_usable(path: Path) -> bool:
     return any(
         candidate.exists()
@@ -9723,6 +9790,7 @@ def specialization_path_is_usable(path: Path) -> bool:
 
 def collect_specialization_loop_payload() -> dict[str, Any]:
     installed = load_json(REGISTRY_PATH, {})
+    telegram_root = first_existing_path(telegram_gateway_candidates(installed))
     labs_root = first_existing_path([
         *env_path_candidates("SPARK_DOMAIN_CHIP_LABS_ROOT"),
         *(candidate for candidate in [installed_path_candidate(installed, "spark-domain-chip-labs")] if candidate is not None),
@@ -9734,10 +9802,14 @@ def collect_specialization_loop_payload() -> dict[str, Any]:
     path_roots = specialization_path_candidates(installed)
     usable_paths = [candidate for candidate in path_roots if specialization_path_is_usable(candidate)]
 
+    telegram_ok = bool(telegram_root and telegram_gateway_is_usable(telegram_root))
+    labs_schema_dir = labs_root / "docs" / "creator_system" / "schemas" if labs_root else None
     labs_ok = bool(
         labs_root
         and (labs_root / "src" / "chip_labs").exists()
-        and (labs_root / "docs" / "creator_system" / "schemas" / "creator-mission-status.schema.json").exists()
+        and labs_schema_dir
+        and (labs_schema_dir / "creator-mission-status.schema.json").exists()
+        and (labs_schema_dir / "specialization-loop-status.schema.json").exists()
     )
     swarm_ok = bool(
         swarm_root
@@ -9747,15 +9819,26 @@ def collect_specialization_loop_payload() -> dict[str, Any]:
 
     checks = [
         {
+            "name": "telegram_specialization_gateway",
+            "ok": telegram_ok,
+            "required": True,
+            "detail": (
+                f"spark-telegram-bot found at {telegram_root}; Telegram can surface specialization-loop status and safe prompts."
+                if telegram_ok
+                else "spark-telegram-bot is not installed or discoverable as SPARK_TELEGRAM_BOT_ROOT."
+            ),
+            "repair": "Run `spark setup telegram-starter`, install spark-telegram-bot, or set SPARK_TELEGRAM_BOT_ROOT to its repo path.",
+        },
+        {
             "name": "domain_chip_labs",
             "ok": labs_ok,
             "required": True,
             "detail": (
-                f"spark-domain-chip-labs found at {labs_root} with creator mission status schema."
+                f"spark-domain-chip-labs found at {labs_root} with creator and specialization-loop schemas."
                 if labs_ok
                 else "spark-domain-chip-labs is not installed or discoverable as SPARK_DOMAIN_CHIP_LABS_ROOT."
             ),
-            "repair": "Install spark-domain-chip-labs or set SPARK_DOMAIN_CHIP_LABS_ROOT to its repo path.",
+            "repair": "Install or update spark-domain-chip-labs, or set SPARK_DOMAIN_CHIP_LABS_ROOT to its repo path.",
         },
         {
             "name": "spark_swarm_specialization_registry",
@@ -9786,14 +9869,21 @@ def collect_specialization_loop_payload() -> dict[str, Any]:
         "ok": ok,
         "summary": "Spark specialization loop verification",
         "checks": checks,
+        "telegram_root": str(telegram_root) if telegram_root else None,
         "labs_root": str(labs_root) if labs_root else None,
         "swarm_root": str(swarm_root) if swarm_root else None,
         "specialization_paths": [str(path) for path in usable_paths],
+        "safe_next_moves": [
+            "Run `spark doctor specialization-loop` for plain-language repair guidance.",
+            "Set SPARK_TELEGRAM_BOT_ROOT, SPARK_DOMAIN_CHIP_LABS_ROOT, SPARK_SWARM_ROOT, or SPARK_SPECIALIZATION_PATH_ROOTS when repos live outside Spark's installed registry.",
+            "Run benchmark and Swarm status commands only against local paths you choose; Spark CLI does not publish specialization-loop results.",
+        ],
         "next_commands": [
             "spark verify --specialization-loop --json",
             "chip-labs creator-run-smoke <run-dir> --recompute --fail-on-blocked",
-            "spark-swarm specialization-path doctor <path_key> <repo> --json",
+            "spark-swarm specialization-path status <path_key> <repo> --json",
         ],
+        "boundary": "This check only inspects discoverability. It does not start runs, publish, delete, or repair automatically.",
     }
 
 
@@ -10968,10 +11058,20 @@ def cmd_verify(args: argparse.Namespace) -> int:
             print(f"{marker} {check['name']}: {check['detail']}")
             if not check["ok"] and check.get("repair"):
                 print(f"      {check['repair']}")
+        safe_next_moves = payload.get("safe_next_moves")
+        if isinstance(safe_next_moves, list) and safe_next_moves:
+            print("")
+            print("Safe next moves:")
+            for move in safe_next_moves:
+                print(f"  - {move}")
         print("")
         print("Useful commands:")
         for command in payload["next_commands"]:
             print(f"  {command}")
+        if payload.get("boundary"):
+            print("")
+            print("Boundary:")
+            print(f"  {payload['boundary']}")
         return 0 if payload["ok"] else 1
 
     if getattr(args, "hosted", False):
@@ -13695,6 +13795,10 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_subparsers = doctor_parser.add_subparsers(dest="doctor_command")
     doctor_parser.add_argument("--json", action="store_true")
     doctor_parser.set_defaults(func=cmd_doctor)
+
+    doctor_specialization_loop_parser = doctor_subparsers.add_parser("specialization-loop", help="Inspect specialization-loop discoverability without starting runs")
+    doctor_specialization_loop_parser.add_argument("--json", action="store_true")
+    doctor_specialization_loop_parser.set_defaults(func=cmd_doctor)
 
     doctor_llm_parser = doctor_subparsers.add_parser("llm", help="Ask the user's configured LLM for a redacted Spark repair plan")
     doctor_llm_parser.add_argument("problem", nargs="*", help="Problem statement, for example: Telegram is quiet after restart")
