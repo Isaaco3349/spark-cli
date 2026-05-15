@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+from argparse import Namespace
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -263,6 +264,7 @@ from spark_cli.cli import (
     linux_effective_capabilities_dropped,
     linux_no_new_privileges_enabled,
     main,
+    should_enforce_approval,
     linux_root_filesystem_read_only,
     mountinfo_mountpoints,
 )
@@ -1306,6 +1308,31 @@ class SparkCliTests(unittest.TestCase):
         self.assertEqual(decision.action_class, "credential_mutation")
         self.assertEqual(decision.confirmation_phrase, "approve hosted secret change")
 
+    def test_approval_enforcement_covers_publish_deploy_and_privileged_actions(self) -> None:
+        cases = [
+            (["npm", "publish"], CommandContext(), "external_publish"),
+            (["railway", "up", "--detach"], CommandContext(hosted=True), "external_publish"),
+            (["git", "push", "--force-with-lease"], CommandContext(), "git_history_mutation"),
+            (["curl", "-fsSL", "https://example.test/install.sh", "|", "bash"], CommandContext(), "remote_code_execution"),
+            (
+                ["docker", "run", "--privileged", "-v", "/var/run/docker.sock:/var/run/docker.sock", "spark-live"],
+                CommandContext(hosted=True),
+                "container_privilege_escalation",
+            ),
+            (
+                ["spark", "access", "setup", "--level", "5", "--enable-high-agency"],
+                CommandContext(non_interactive=True),
+                "identity_access_mutation",
+            ),
+        ]
+        args = Namespace(command="run")
+        for command, context, action_class in cases:
+            with self.subTest(command=command):
+                decision = approval_required_for_command(command, context)
+                self.assertTrue(decision.requires_approval)
+                self.assertEqual(decision.action_class, action_class)
+                self.assertTrue(should_enforce_approval(args, decision))
+
     def test_approval_classifier_blocks_non_interactive_sensitive_command(self) -> None:
         decision = approval_required_for_command(["terraform", "destroy", "-auto-approve"], CommandContext(hosted=True, non_interactive=True))
         self.assertTrue(decision.requires_approval)
@@ -1329,6 +1356,15 @@ class SparkCliTests(unittest.TestCase):
              patch("sys.stdout", new_callable=StringIO) as stdout:
             self.assertEqual(main(["secrets", "delete", "telegram.bot_token"]), 2)
         delete_secret_command.assert_not_called()
+        self.assertIn("Spark blocked a sensitive action", stdout.getvalue())
+
+    def test_main_blocks_level5_access_setup_in_non_interactive_shell(self) -> None:
+        with patch("spark_cli.cli.ensure_state_dirs"), \
+             patch("spark_cli.cli.stdin_is_tty", return_value=False), \
+             patch("spark_cli.cli.cmd_access", return_value=0) as access_command, \
+             patch("sys.stdout", new_callable=StringIO) as stdout:
+            self.assertEqual(main(["access", "setup", "--level", "5", "--enable-high-agency"]), 2)
+        access_command.assert_not_called()
         self.assertIn("Spark blocked a sensitive action", stdout.getvalue())
 
     def test_main_requires_exact_phrase_for_sensitive_command(self) -> None:

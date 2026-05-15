@@ -8599,7 +8599,12 @@ def cmd_sandbox(args: argparse.Namespace) -> int:
 APPROVAL_ENFORCED_ACTION_CLASSES = {
     "credential_mutation",
     "destructive_filesystem",
+    "external_publish",
+    "git_history_mutation",
+    "identity_access_mutation",
     "network_exfiltration",
+    "remote_code_execution",
+    "container_privilege_escalation",
     "process_autostart_mutation",
 }
 
