@@ -228,6 +228,7 @@ from spark_cli.cli import (
     write_denied_prefixes,
     windows_service_creationflags,
     resolve_bundle_names,
+    resolve_setup_bundle_plan,
     resolve_install_target,
     resolve_restart_modules,
     resolve_start_modules,
@@ -342,6 +343,53 @@ def make_module(name: str, capabilities: list[str], secrets: list[str] | None = 
             "secrets": secret_definitions,
         },
     )
+
+
+def make_telegram_gateway(needs_capabilities: list[str] | None = None) -> Module:
+    return Module(
+        name="spark-telegram-bot",
+        path=Path("C:/tmp/spark-telegram-bot"),
+        manifest={
+            "module": {
+                "name": "spark-telegram-bot",
+                "version": "1.0.0",
+                "kind": "service",
+                "plane": "ingress",
+            },
+            "provides": {
+                "capabilities": ["telegram.ingress", "telegram.reply", "telegram.mission-control"],
+            },
+            "needs": {
+                "modules": ["spark-intelligence-builder", "spawner-ui"],
+                "capabilities": needs_capabilities or ["spark.runtime", "mission.execution"],
+                "secrets": [],
+            },
+        },
+    )
+
+
+def make_starter_modules(include_voice: bool = True) -> dict[str, Module]:
+    modules = {
+        "spark-researcher": make_module("spark-researcher", ["spark.research"]),
+        "spark-character": make_module("spark-character", ["spark.character"]),
+        "spark-intelligence-builder": make_module("spark-intelligence-builder", ["spark.runtime"]),
+        "domain-chip-memory": make_module("domain-chip-memory", ["memory.store"]),
+        "spawner-ui": make_module("spawner-ui", ["mission.execution"]),
+        "spark-telegram-bot": make_telegram_gateway(),
+    }
+    if include_voice:
+        modules["spark-voice-comms"] = make_module(
+            "spark-voice-comms",
+            [
+                "spark.voice",
+                "spark.voice.stt",
+                "spark.voice.tts",
+                "spark.voice.telegram_hooks",
+                "voice.speak",
+                "voice.transcribe",
+            ],
+        )
+    return modules
 
 
 class SparkCliTests(unittest.TestCase):
@@ -3239,6 +3287,11 @@ class SparkCliTests(unittest.TestCase):
         providers = capability_providers("memory.store", {alpha.name: alpha, beta.name: beta})
         self.assertEqual(providers, ["alpha", "beta"])
 
+    def test_voice_capability_aliases_resolve_to_voice_comms(self) -> None:
+        modules = make_starter_modules(include_voice=True)
+        self.assertEqual(capability_providers("voice.speak", modules), ["spark-voice-comms"])
+        self.assertEqual(capability_providers("voice.transcribe", modules), ["spark-voice-comms"])
+
     def test_validate_capability_needs_satisfied_by_same_batch(self) -> None:
         gateway = Module(
             name="spark-telegram-bot",
@@ -3425,6 +3478,32 @@ class SparkCliTests(unittest.TestCase):
                 "spark-telegram-bot",
             ],
         )
+
+    def test_resolve_setup_bundle_plan_allows_plain_telegram_without_voice(self) -> None:
+        modules = make_starter_modules(include_voice=False)
+        args = build_parser().parse_args(["setup", "telegram-starter", "--no-start-now", "--no-autostart"])
+        with patch("spark_cli.cli.discover_modules", return_value=modules), \
+            patch("spark_cli.cli.ensure_bundle_modules_available", side_effect=lambda names, existing: dict(existing)), \
+            patch("spark_cli.cli.resolve_installed_modules", return_value={}), \
+            patch("spark_cli.cli.enforce_runtime_versions", return_value=None):
+            plan = resolve_setup_bundle_plan(args)
+
+        self.assertEqual([module.name for module in plan.bundle], resolve_bundle_names("telegram-starter"))
+        self.assertEqual(plan.ingress_owner.name, "spark-telegram-bot")
+        self.assertNotIn("spark-voice-comms", plan.modules)
+
+    def test_resolve_setup_bundle_plan_voice_starter_activates_voice_comms(self) -> None:
+        modules = make_starter_modules(include_voice=True)
+        args = build_parser().parse_args(["setup", "telegram-voice-starter", "--no-start-now", "--no-autostart"])
+        with patch("spark_cli.cli.discover_modules", return_value=modules), \
+            patch("spark_cli.cli.ensure_bundle_modules_available", side_effect=lambda names, existing: dict(existing)), \
+            patch("spark_cli.cli.resolve_installed_modules", return_value={}), \
+            patch("spark_cli.cli.enforce_runtime_versions", return_value=None):
+            plan = resolve_setup_bundle_plan(args)
+
+        self.assertIn("spark-voice-comms", [module.name for module in plan.bundle])
+        self.assertIn("voice.speak", plan.modules["spark-voice-comms"].capabilities)
+        self.assertIn("voice.transcribe", plan.modules["spark-voice-comms"].capabilities)
 
     def test_setup_defaults_to_telegram_starter_bundle(self) -> None:
         args = build_parser().parse_args(["setup", "--non-interactive"])
@@ -10969,6 +11048,12 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("Refusing non-canonical Spark CLI source", script)
         self.assertIn('if [ "$SPARK_CLI_REF_USER_SET" = "1" ]', script)
         self.assertIn("checkout_cli_ref", script)
+        self.assertIn("SPARK_AUTOSTART_USER_SET=0", script)
+        self.assertIn("SPARK_AUTOSTART_AUTO_DISABLED=0", script)
+        self.assertIn("bundle_includes_voice", script)
+        self.assertIn("autostart_plan_label", script)
+        self.assertIn("Voice included:", script)
+        self.assertIn("--autostart", script)
         self.assertIn('SPARK_AUTOSTART="${SPARK_AUTOSTART:-1}"', script)
         self.assertIn("--no-autostart", script)
         self.assertIn('export SPARK_HOME="$SPARK_PREFIX"', script)
@@ -11004,6 +11089,37 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn('spark_setup_cmd+=("--minimax-api-key" "$spark_secret_ref_value")', script)
         self.assertIn("spark_cli.cli", script)
 
+    def test_install_script_dry_run_reflects_bundle_voice_and_autostart(self) -> None:
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("bash is not available")
+        script_path = Path(__file__).resolve().parents[1] / "scripts" / "install.sh"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            env = dict(os.environ)
+            env["SPARK_PREFIX"] = str(Path(tmp_dir) / ".spark")
+            result = subprocess.run(
+                [
+                    bash,
+                    "./scripts/install.sh",
+                    "--dry-run",
+                    "--upgrade-existing",
+                    "--bundle",
+                    "telegram-voice-starter",
+                ],
+                cwd=str(script_path.parents[1]),
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("Bundle:              telegram-voice-starter", result.stdout)
+        self.assertIn("Voice included:      yes", result.stdout)
+        self.assertIn("Autostart:           no; auto-disabled for --yes/non-interactive run", result.stdout)
+        self.assertIn("--no-start-now --no-autostart", result.stdout)
+        self.assertNotIn("--start-now --autostart", result.stdout)
+
     def test_windows_install_script_bootstraps_local_prefix_contract(self) -> None:
         script = (Path(__file__).resolve().parents[1] / "scripts" / "install.ps1").read_text(encoding="utf-8")
         release_source = installer_manifest_payload()["source"]
@@ -11034,6 +11150,11 @@ class SparkCliTests(unittest.TestCase):
         self.assertIn("Warn-SparkCommandConflict", script)
         self.assertIn("A different spark command is earlier on fresh Windows PATH", script)
         self.assertIn("[switch]$AllowDevSource", script)
+        self.assertIn("[switch]$Autostart", script)
+        self.assertIn("Apply-InstallDefaults", script)
+        self.assertIn("Test-BundleIncludesVoice", script)
+        self.assertIn("Format-AutostartPlan", script)
+        self.assertIn("Voice included:", script)
         self.assertIn("Test-InstallSettings", script)
         self.assertIn("Refusing non-canonical Spark CLI source", script)
         self.assertIn("if ($RefWasProvided -and $Ref -and -not $AllowDevSource)", script)

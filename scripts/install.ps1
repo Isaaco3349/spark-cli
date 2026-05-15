@@ -20,6 +20,7 @@ param(
     [string[]]$SetupArg = @(),
     [string]$LocalRegistry = "",
     [switch]$SkipSetup,
+    [switch]$Autostart,
     [switch]$NoAutostart,
     [switch]$AllowDevSource,
     [switch]$DryRun,
@@ -36,10 +37,37 @@ $Script:PythonExe = ""
 $Script:UvExe = ""
 $Script:InstallLogPath = ""
 $Script:TranscriptStarted = $false
+$Script:AutostartAutoDisabled = $false
+$Script:AutostartWasProvided = $PSBoundParameters.ContainsKey("Autostart") -or $PSBoundParameters.ContainsKey("NoAutostart")
 
 function Write-SparkLog {
     param([string]$Message)
     Write-Host "[spark-install] $Message"
+}
+
+function Apply-InstallDefaults {
+    if ($Autostart) {
+        $script:NoAutostart = $false
+        return
+    }
+    if (-not $Script:AutostartWasProvided -and ($Yes -or [Console]::IsInputRedirected)) {
+        $script:NoAutostart = $true
+        $Script:AutostartAutoDisabled = $true
+    }
+}
+
+function Test-BundleIncludesVoice {
+    return $Bundle -like "*voice*"
+}
+
+function Format-AutostartPlan {
+    if (-not $NoAutostart) {
+        return "yes; will mutate login items"
+    }
+    if ($Script:AutostartAutoDisabled) {
+        return "no; auto-disabled for -Yes/non-interactive run"
+    }
+    return "no"
 }
 
 function Resolve-FullPath {
@@ -198,7 +226,7 @@ function Invoke-Preflight {
     Write-SparkLog "Node version: $NodeVersion"
     Write-SparkLog "Python version: $PythonVersion"
     Write-SparkLog "Bundle: $Bundle"
-    Write-SparkLog "Autostart: $(-not $NoAutostart)"
+    Write-SparkLog "Autostart: $(Format-AutostartPlan)"
     if (Test-ExistingInstall) {
         Write-SparkLog "Existing Spark install detected at $Script:SparkPrefix"
     } else {
@@ -228,7 +256,8 @@ Choose one:
 
 function Show-DryRunPlan {
     $setupEnabled = if ($SkipSetup) { "no" } else { "yes" }
-    $autostartEnabled = if ($NoAutostart) { "no" } else { "yes" }
+    $autostartEnabled = Format-AutostartPlan
+    $voiceIncluded = if (Test-BundleIncludesVoice) { "yes" } else { "no" }
     $existing = if (Test-ExistingInstall) { "detected" } else { "none" }
     $existingMode = if ($UpgradeExisting) { "upgrade" } else { "abort" }
     Write-Host "Spark install preview"
@@ -252,6 +281,7 @@ function Show-DryRunPlan {
     Write-Host "  CLI release:         $SparkCliReleaseName"
     Write-Host "  CLI commit:          $Ref"
     Write-Host "  Bundle:              $Bundle"
+    Write-Host "  Voice included:      $voiceIncluded"
     Write-Host "  Setup enabled:       $setupEnabled"
     $providerPlan = if ($LlmProvider) { "$LlmProvider for Agent and Mission" } else { "choose during spark setup" }
     Write-Host "  Default provider:    $providerPlan"
@@ -683,6 +713,7 @@ function Run-Autostart {
 
 function Invoke-Install {
     $Script:SparkPrefix = Resolve-FullPath $Prefix
+    Apply-InstallDefaults
     Test-InstallSettings
     if ($DryRun) {
         Show-DryRunPlan
