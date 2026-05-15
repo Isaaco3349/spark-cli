@@ -36,13 +36,14 @@ def resolve_runtime_executable(name: str) -> str:
 
 
 def npm_runtime_command_argv(args: list[str]) -> list[str]:
-    npm_path = Path(resolve_runtime_executable("npm"))
-    if os.name == "nt" and npm_path.suffix.lower() in {".cmd", ".bat"}:
-        node_path = shutil.which("node") or str(npm_path.with_name("node.exe"))
-        npm_cli = npm_path.parent / "node_modules" / "npm" / "bin" / "npm-cli.js"
-        if node_path and npm_cli.exists():
-            return [node_path, str(npm_cli), *args]
-    return [str(npm_path), *args]
+    npm_path = resolve_runtime_executable("npm")
+    if os.name == "nt" and os.path.splitext(npm_path)[1].lower() in {".cmd", ".bat"}:
+        npm_dir = os.path.dirname(npm_path)
+        node_path = shutil.which("node") or os.path.join(npm_dir, "node.exe")
+        npm_cli = os.path.join(npm_dir, "node_modules", "npm", "bin", "npm-cli.js")
+        if node_path and os.path.exists(npm_cli):
+            return [node_path, npm_cli, *args]
+    return [npm_path, *args]
 
 
 def runtime_command_argv(command: str) -> list[str]:

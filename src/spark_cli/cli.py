@@ -4516,8 +4516,9 @@ def scan_module_trust(module: Module, *, trust_tier: str | None = None) -> list[
     findings: list[ChipScanFinding] = []
     total_bytes = 0
     scanned_files = 0
+    path_type = root.__class__
     for current_root, dir_names, file_names in os.walk(root):
-        current = Path(current_root)
+        current = path_type(current_root)
         dir_names[:] = [name for name in dir_names if name not in CHIP_SCAN_SKIP_DIRS]
         for name in list(dir_names):
             directory = current / name
