@@ -4086,10 +4086,15 @@ def build_trace_repair_queue(trace_index: dict[str, Any]) -> list[dict[str, Any]
         )
 
     rows = as_list(as_dict(trace_health.get("missing_trace_ref_sources")).get("rows"))
+    seen_ids: set[str] = set()
     for row in rows[:10]:
         row = as_dict(row)
         component = str(row.get("component") or "unknown")
         event_type = str(row.get("event_type") or "unknown")
+        repair_id = trace_repair_id("builder", component, event_type, "missing-trace-ref")
+        if repair_id in seen_ids:
+            continue
+        seen_ids.add(repair_id)
         owner = trace_repair_owner(component)
         rank_reason = "largest Builder producer bucket missing trace_ref"
         safe_fix = "Thread the active request_id/trace_ref into this event producer before recording black-box events."
@@ -4109,7 +4114,7 @@ def build_trace_repair_queue(trace_index: dict[str, Any]) -> list[dict[str, Any]
             )
         queue.append(
             {
-                "id": trace_repair_id("builder", component, event_type, "missing-trace-ref"),
+                "id": repair_id,
                 "priority": "medium" if historical_scope or latest_clean or stale_missing else "high",
                 "rank_reason": rank_reason,
                 "owner_repo": owner.get("owner_repo"),
