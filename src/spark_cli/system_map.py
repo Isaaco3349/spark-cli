@@ -3845,17 +3845,29 @@ def inspect_public_output_authority(desktop: Path) -> dict[str, Any]:
     }
 
 
-def build_authority_view(desktop: Path, setup_summary: dict[str, Any]) -> dict[str, Any]:
+def build_authority_view(desktop: Path, setup_summary: dict[str, Any], spark_home: Path | None = None) -> dict[str, Any]:
+    search_roots = []
+    if spark_home:
+        search_roots += [spark_home / "modules", spark_home / "tools"]
+    search_roots.append(desktop)
+
+    def _resolve(*parts: str) -> Path:
+        for root in search_roots:
+            candidate = root.joinpath(*parts)
+            if candidate.exists():
+                return candidate
+        return desktop.joinpath(*parts)
+
     source_files = {
-        "cli_access_policy": desktop / "spark-cli" / "src" / "spark_cli" / "sandbox" / "access.py",
-        "cli_capabilities": desktop / "spark-cli" / "src" / "spark_cli" / "sandbox" / "capabilities.py",
-        "telegram_access_policy": desktop / "spark-telegram-bot" / "src" / "accessPolicy.ts",
-        "builder_aoc": desktop / "spark-intelligence-builder" / "src" / "spark_intelligence" / "self_awareness" / "operating_context.py",
-        "spawner_access_lanes": desktop / "spawner-ui" / "src" / "lib" / "server" / "access-execution-lanes.ts",
-        "spawner_access_actions": desktop / "spawner-ui" / "src" / "lib" / "server" / "access-execution-actions.ts",
-        "browser_constants": desktop / "spark-browser-extension" / "src" / "protocol" / "constants.js",
-        "browser_policy": desktop / "spark-browser-extension" / "src" / "protocol" / "policy.js",
-        "swarm_sync_validation": desktop / "spark-swarm" / "apps" / "api" / "src" / "collective" / "sync-validation.ts",
+        "cli_access_policy": _resolve("spark-cli", "src", "spark_cli", "sandbox", "access.py"),
+        "cli_capabilities": _resolve("spark-cli", "src", "spark_cli", "sandbox", "capabilities.py"),
+        "telegram_access_policy": _resolve("spark-telegram-bot", "src", "accessPolicy.ts"),
+        "builder_aoc": _resolve("spark-intelligence-builder", "src", "spark_intelligence", "self_awareness", "operating_context.py"),
+        "spawner_access_lanes": _resolve("spawner-ui", "src", "lib", "server", "access-execution-lanes.ts"),
+        "spawner_access_actions": _resolve("spawner-ui", "src", "lib", "server", "access-execution-actions.ts"),
+        "browser_constants": _resolve("spark-browser-extension", "src", "protocol", "constants.js"),
+        "browser_policy": _resolve("spark-browser-extension", "src", "protocol", "policy.js"),
+        "swarm_sync_validation": _resolve("spark-swarm", "apps", "api", "src", "collective", "sync-validation.ts"),
     }
     observed_sources = {name: {"path": str(path), "exists": path.exists()} for name, path in source_files.items()}
 
@@ -5365,7 +5377,7 @@ def compile_system_map(desktop: Path, spark_home: Path, registry_path: Path) -> 
 
     compiled = {
         "system_map": system_map,
-        "authority_view": build_authority_view(desktop, setup_summary),
+        "authority_view": build_authority_view(desktop, setup_summary, spark_home=spark_home),
         "capability_catalog": build_capability_catalog(repos),
         "trace_index": build_trace_index(spark_home, builder_home),
         "memory_movement_index": build_memory_movement_index(builder_home),
