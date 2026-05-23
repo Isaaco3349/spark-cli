@@ -3911,7 +3911,6 @@ def build_authority_view(desktop: Path, setup_summary: dict[str, Any], spark_hom
             if candidate.exists():
                 return candidate
         return desktop.joinpath(*parts)
-
     source_files = {
         "cli_access_policy": _resolve("spark-cli", "src", "spark_cli", "sandbox", "access.py"),
         "cli_capabilities": _resolve("spark-cli", "src", "spark_cli", "sandbox", "capabilities.py"),
@@ -5444,7 +5443,7 @@ def compile_system_map(desktop: Path, spark_home: Path, registry_path: Path) -> 
 
     compiled = {
         "system_map": system_map,
-        "authority_view": build_authority_view(desktop, setup_summary, spark_home=spark_home),
+       "authority_view": build_authority_view(desktop, setup_summary, spark_home=spark_home),
         "capability_catalog": build_capability_catalog(repos),
         "trace_index": build_trace_index(spark_home, builder_home),
         "memory_movement_index": build_memory_movement_index(builder_home),
